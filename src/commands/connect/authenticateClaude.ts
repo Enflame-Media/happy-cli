@@ -50,7 +50,7 @@ function generateState(): string {
 async function findAvailablePort(): Promise<number> {
     return new Promise((resolve) => {
         const server = createServer();
-        server.listen(0, '127.0.0.1', () => {
+        server.listen(0, '0.0.0.0', () => {
             const port = (server.address() as any).port;
             server.close(() => resolve(port));
         });
@@ -67,7 +67,7 @@ async function isPortAvailable(port: number): Promise<boolean> {
             testServer.close();
             resolve(false);
         });
-        testServer.listen(port, '127.0.0.1', () => {
+        testServer.listen(port, '0.0.0.0', () => {
             testServer.close(() => resolve(true));
         });
     });
@@ -81,26 +81,45 @@ async function exchangeCodeForTokens(
     code: string,
     verifier: string,
     port: number,
-    state: string
+    state: string,
+    debug: boolean
 ): Promise<ClaudeAuthTokens> {
 
     // Exchange code for tokens
+    // Anthropic expects JSON format (non-standard OAuth, but valid)
+    const requestBody = {
+        grant_type: 'authorization_code',
+        code: code,
+        redirect_uri: `http://localhost:${port}/callback`,
+        code_verifier: verifier,
+        client_id: CLIENT_ID,
+        state: state,
+    };
+
+    if (debug) {
+        console.log('\n🔍 Token Exchange Debug:');
+        console.log('  Token URL:', TOKEN_URL);
+        console.log('  Request body:', JSON.stringify(requestBody, null, 2));
+    }
+
     const tokenResponse = await fetch(TOKEN_URL, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-            grant_type: 'authorization_code',
-            code: code,
-            redirect_uri: `http://localhost:${port}/callback`,
-            client_id: CLIENT_ID,
-            code_verifier: verifier,
-            state: state,
-        }),
+        body: JSON.stringify(requestBody),
     });
+
+    if (debug) {
+        console.log('  Response status:', tokenResponse.status, tokenResponse.statusText);
+    }
+
     if (!tokenResponse.ok) {
-        throw new Error(`Token exchange failed: ${tokenResponse.statusText}`);
+        const errorText = await tokenResponse.text();
+        if (debug) {
+            console.log('  Error response body:', errorText);
+        }
+        throw new Error(`Token exchange failed: ${tokenResponse.statusText} - ${errorText}`);
     }
 
     // {
@@ -133,7 +152,8 @@ async function exchangeCodeForTokens(
 async function startCallbackServer(
     state: string,
     verifier: string,
-    port: number
+    port: number,
+    debug: boolean
 ): Promise<ClaudeAuthTokens> {
     return new Promise((resolve, reject) => {
         const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -143,7 +163,22 @@ async function startCallbackServer(
                 const code = url.searchParams.get('code');
                 const receivedState = url.searchParams.get('state');
 
+                if (debug) {
+                    // Debug logging
+                    console.log('\n🔍 OAuth Callback Debug:');
+                    console.log('  Expected state:', state);
+                    console.log('  Received state:', receivedState);
+                    console.log('  States match:', receivedState === state);
+                    console.log('  Expected length:', state?.length);
+                    console.log('  Received length:', receivedState?.length);
+                    console.log('  Expected type:', typeof state);
+                    console.log('  Received type:', typeof receivedState);
+                }
+
                 if (receivedState !== state) {
+                    if (debug) {
+                        console.log('❌ State validation failed!');
+                    }
                     res.writeHead(400);
                     res.end('Invalid state parameter');
                     server.close();
@@ -161,9 +196,9 @@ async function startCallbackServer(
 
                 try {
                     // Exchange code for tokens
-                    const tokens = await exchangeCodeForTokens(code, verifier, port, state);
+                    const tokens = await exchangeCodeForTokens(code, verifier, port, state, debug);
 
-                    // Redirect to Anthropic's success page
+                    // Redirect to console success page (official Claude Code behavior)
                     res.writeHead(302, {
                         'Location': 'https://console.anthropic.com/oauth/code/success?app=claude-code'
                     });
@@ -180,7 +215,7 @@ async function startCallbackServer(
             }
         });
 
-        server.listen(port, '127.0.0.1', () => {
+        server.listen(port, '0.0.0.0', () => {
             // console.log(`🔐 OAuth callback server listening on port ${port}`);
         });
 
@@ -194,22 +229,27 @@ async function startCallbackServer(
 
 /**
  * Authenticate with Anthropic Claude and return tokens
- * 
+ *
  * This function handles the complete OAuth flow:
  * 1. Generates PKCE codes and state
  * 2. Starts local callback server
  * 3. Opens browser for authentication
  * 4. Handles callback and token exchange
  * 5. Returns complete token object
- * 
+ *
+ * @param debug - Enable debug logging for OAuth flow
  * @returns Promise resolving to AnthropicAuthTokens with all token information
  */
-export async function authenticateClaude(): Promise<ClaudeAuthTokens> {
+export async function authenticateClaude(debug: boolean = false): Promise<ClaudeAuthTokens> {
     console.log('🚀 Starting Anthropic Claude authentication...');
 
     // Generate PKCE codes and state
     const { verifier, challenge } = generatePKCE();
     const state = generateState();
+
+    if (debug) {
+        console.log('🔐 Generated OAuth state:', state);
+    }
 
     // Try to use default port, or find an available one
     let port = DEFAULT_PORT;
@@ -223,12 +263,13 @@ export async function authenticateClaude(): Promise<ClaudeAuthTokens> {
     console.log(`📡 Using callback port: ${port}`);
 
     // Start callback server FIRST (before opening browser)
-    const serverPromise = startCallbackServer(state, verifier, port);
+    // Note: Server binds to 0.0.0.0 but redirect URI must use localhost per Anthropic's OAuth config
+    const serverPromise = startCallbackServer(state, verifier, port, debug);
 
     // Wait a moment to ensure server is listening
     await new Promise(resolve => setTimeout(resolve, 100));
 
-    // Build authorization URL
+    // Build authorization URL with localhost (required by Anthropic's OAuth configuration)
     const redirect_uri = `http://localhost:${port}/callback`;
 
     // Build authorization URL with code=true for Claude.ai

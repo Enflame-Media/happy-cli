@@ -7,7 +7,7 @@ import { authenticateGemini } from './connect/authenticateGemini';
 
 /**
  * Handle connect subcommand
- * 
+ *
  * Implements connect subcommands for storing AI vendor API keys:
  * - connect codex: Store OpenAI API key in Happy cloud
  * - connect claude: Store Anthropic API key in Happy cloud
@@ -22,15 +22,18 @@ export async function handleConnectCommand(args: string[]): Promise<void> {
         return;
     }
 
+    // Parse flags
+    const debug = args.includes('--debug');
+
     switch (subcommand.toLowerCase()) {
         case 'codex':
-            await handleConnectVendor('codex', 'OpenAI');
+            await handleConnectVendor('codex', 'OpenAI', debug);
             break;
         case 'claude':
-            await handleConnectVendor('claude', 'Anthropic');
+            await handleConnectVendor('claude', 'Anthropic', debug);
             break;
         case 'gemini':
-            await handleConnectVendor('gemini', 'Gemini');
+            await handleConnectVendor('gemini', 'Gemini', debug);
             break;
         default:
             console.error(chalk.red(`Unknown connect target: ${subcommand}`));
@@ -66,7 +69,7 @@ ${chalk.bold('Notes:')}
 `);
 }
 
-async function handleConnectVendor(vendor: 'codex' | 'claude' | 'gemini', displayName: string): Promise<void> {
+async function handleConnectVendor(vendor: 'codex' | 'claude' | 'gemini', displayName: string, debug: boolean): Promise<void> {
     console.log(chalk.bold(`\n🔌 Connecting ${displayName} to Happy cloud\n`));
 
     // Check if authenticated
@@ -89,7 +92,7 @@ async function handleConnectVendor(vendor: 'codex' | 'claude' | 'gemini', displa
         process.exit(0);
     } else if (vendor === 'claude') {
         console.log('🚀 Registering Anthropic token with server');
-        const anthropicAuthTokens = await authenticateClaude();
+        const anthropicAuthTokens = await authenticateClaude(debug);
         await api.registerVendorToken('anthropic', { oauth: anthropicAuthTokens });
         console.log('✅ Anthropic token registered with server');
         process.exit(0);

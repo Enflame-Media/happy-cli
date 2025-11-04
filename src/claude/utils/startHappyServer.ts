@@ -7,12 +7,14 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createServer } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { AddressInfo } from "node:net";
-import { z } from "zod";
 import { logger } from "@/ui/logger";
 import { ApiSessionClient } from "@/api/apiSession";
 import { randomUUID } from "node:crypto";
 
 export async function startHappyServer(client: ApiSessionClient) {
+    const { z } = await import('zod');
+
+
     // Handler that sends title updates via the client
     const handler = async (title: string) => {
         logger.debug('[happyMCP] Changing title to:', title);
@@ -45,7 +47,7 @@ export async function startHappyServer(client: ApiSessionClient) {
         title: 'Change Chat Title',
         inputSchema: {
             title: z.string().describe('The new title for the chat session'),
-        } as any,
+        },
     }, async (args: any) => {
         const response = await handler(args.title);
         logger.debug('[happyMCP] Response:', response);

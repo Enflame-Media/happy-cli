@@ -15,7 +15,6 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { z } from 'zod';
 
 function parseArgs(argv: string[]): { url: string | null } {
   let url: string | null = null;
@@ -30,6 +29,8 @@ function parseArgs(argv: string[]): { url: string | null } {
 }
 
 async function main() {
+  const { z } = await import('zod');
+
   // Resolve target HTTP MCP URL
   const { url: urlFromArgs } = parseArgs(process.argv.slice(2));
   const baseUrl = urlFromArgs || process.env.HAPPY_HTTP_MCP_URL || '';
@@ -72,7 +73,7 @@ async function main() {
       title: 'Change Chat Title',
       inputSchema: {
         title: z.string().describe('The new title for the chat session'),
-      } as any,
+      },
     },
     async (args: any) => {
       try {
