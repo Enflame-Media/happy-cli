@@ -39,15 +39,14 @@ export async function startHappyServer(client: ApiSessionClient) {
     const mcp = new McpServer({
         name: "Happy MCP",
         version: "1.0.0",
-        description: "Happy CLI MCP server with chat session management tools",
     });
 
     mcp.registerTool('change_title', {
         description: 'Change the title of the current chat session',
         title: 'Change Chat Title',
-        inputSchema: {
+        inputSchema: z.object({
             title: z.string().describe('The new title for the chat session'),
-        },
+        }) as any, // Type assertion needed for Zod v4 compatibility with MCP SDK (built for Zod v3)
     }, async (args: any) => {
         const response = await handler(args.title);
         logger.debug('[happyMCP] Response:', response);

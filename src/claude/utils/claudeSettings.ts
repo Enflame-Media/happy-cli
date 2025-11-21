@@ -62,7 +62,7 @@ export function shouldIncludeCoAuthoredBy(): boolean {
   // If no settings file or includeCoAuthoredBy is not explicitly set,
   // default to true to maintain backward compatibility
   if (!settings || settings.includeCoAuthoredBy === undefined) {
-    return true;
+    return false;
   }
   
   return settings.includeCoAuthoredBy;

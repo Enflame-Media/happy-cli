@@ -266,11 +266,19 @@ export class ApiMachineClient {
 
         // Handle update events from server
         this.socket.on('update', (data: Update) => {
-            // Machine clients should only care about machine updates
-            if (data.body.t === 'update-machine' && (data.body as UpdateMachineBody).machineId === this.machine.id) {
-                // Handle machine metadata or daemon state updates from other clients (e.g., mobile app)
+            const updateType = data.body.t;
+
+            // Machine clients should only care about machine updates for this specific machine
+            if (updateType === 'update-machine') {
                 const update = data.body as UpdateMachineBody;
 
+                // Only process updates for this machine
+                if (update.machineId !== this.machine.id) {
+                    // Silently ignore updates for other machines
+                    return;
+                }
+
+                // Handle machine metadata or daemon state updates from other clients (e.g., mobile app)
                 if (update.metadata) {
                     logger.debug('[API MACHINE] Received external metadata update');
                     this.machine.metadata = decrypt(this.machine.encryptionKey, this.machine.encryptionVariant, decodeBase64(update.metadata.value));
@@ -282,8 +290,18 @@ export class ApiMachineClient {
                     this.machine.daemonState = decrypt(this.machine.encryptionKey, this.machine.encryptionVariant, decodeBase64(update.daemonState.value));
                     this.machine.daemonStateVersion = update.daemonState.version;
                 }
+            } else if (updateType === 'new-machine') {
+                // Silently ignore new machine registrations (not relevant to this daemon)
+                return;
+            } else if (updateType === 'new-session' || updateType === 'update-session' || updateType === 'new-message') {
+                // Silently ignore session-scoped updates (handled by session clients, not machine client)
+                return;
+            } else if (updateType === 'update-account') {
+                // Silently ignore account updates (not relevant to machine daemon)
+                return;
             } else {
-                logger.debug(`[API MACHINE] Received unknown update type: ${(data.body as any).t}`);
+                // Log truly unknown update types for debugging
+                logger.debug(`[API MACHINE] Received unhandled update type: ${updateType}`);
             }
         });
 

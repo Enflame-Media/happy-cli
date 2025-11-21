@@ -66,6 +66,61 @@ export const UpdateMachineBodySchema = z.object({
 export type UpdateMachineBody = z.infer<typeof UpdateMachineBodySchema>
 
 /**
+ * Update body for new session creation
+ */
+export const NewSessionBodySchema = z.object({
+  t: z.literal('new-session'),
+  id: z.string(),
+  seq: z.number(),
+  metadata: z.string(),
+  metadataVersion: z.number(),
+  agentState: z.string().nullable(),
+  agentStateVersion: z.number(),
+  dataEncryptionKey: z.string().nullable(),
+  active: z.boolean(),
+  activeAt: z.number(),
+  createdAt: z.number(),
+  updatedAt: z.number()
+})
+
+export type NewSessionBody = z.infer<typeof NewSessionBodySchema>
+
+/**
+ * Update body for account changes
+ */
+export const UpdateAccountBodySchema = z.object({
+  t: z.literal('update-account'),
+  id: z.string(),
+  settings: z.object({
+    value: z.string().nullable(),
+    version: z.number()
+  }).nullish(),
+  github: z.any().nullish() // GitHubProfile type
+})
+
+export type UpdateAccountBody = z.infer<typeof UpdateAccountBodySchema>
+
+/**
+ * Update body for new machine registration
+ */
+export const NewMachineBodySchema = z.object({
+  t: z.literal('new-machine'),
+  machineId: z.string(),
+  seq: z.number(),
+  metadata: z.string(),
+  metadataVersion: z.number(),
+  daemonState: z.string().nullable(),
+  daemonStateVersion: z.number(),
+  dataEncryptionKey: z.string().nullable(),
+  active: z.boolean(),
+  activeAt: z.number(),
+  createdAt: z.number(),
+  updatedAt: z.number()
+})
+
+export type NewMachineBody = z.infer<typeof NewMachineBodySchema>
+
+/**
  * Update event from server
  */
 export const UpdateSchema = z.object({
@@ -75,6 +130,9 @@ export const UpdateSchema = z.object({
     UpdateBodySchema,
     UpdateSessionBodySchema,
     UpdateMachineBodySchema,
+    NewSessionBodySchema,
+    UpdateAccountBodySchema,
+    NewMachineBodySchema,
   ]),
   createdAt: z.number()
 })
