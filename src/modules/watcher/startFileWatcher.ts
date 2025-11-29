@@ -1,6 +1,7 @@
+import { existsSync } from "fs";
+import { watch } from "fs/promises";
 import { logger } from "@/ui/logger";
 import { delay } from "@/utils/time";
-import { watch } from "fs/promises";
 
 /**
  * Type guard for Node.js system errors with error codes
@@ -14,10 +15,20 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
  */
 const FATAL_ERROR_CODES = new Set(['ENOENT', 'EACCES', 'EISDIR', 'EINVAL']);
 
+/**
+ * Event types emitted by the file watcher.
+ * - 'change': File content was modified
+ * - 'rename': File was renamed (still exists at watched path)
+ * - 'removed': File was deleted or renamed away from watched path
+ */
+export type FileWatchEvent = 'change' | 'rename' | 'removed';
+
 /** Options for configuring the file watcher behavior */
 export interface FileWatcherOptions {
     /** Maximum consecutive errors before stopping the watcher. Default: 10 */
     maxConsecutiveErrors?: number;
+    /** Debounce time in milliseconds to coalesce rapid events. Default: 100 */
+    debounceMs?: number;
 }
 
 /**
@@ -28,19 +39,59 @@ export interface FileWatcherOptions {
  * - Maximum consecutive errors is reached
  * - The abort function is called
  *
+ * Handles filesystem rename events by checking if the file still exists:
+ * - If file exists after rename event: 'rename' event (file renamed TO this path)
+ * - If file doesn't exist after rename: 'removed' event (file deleted or renamed away)
+ *
  * @param file - Path to the file to watch
- * @param onFileChange - Callback invoked when the file changes
+ * @param onFileChange - Callback invoked when the file changes, with event type
  * @param options - Configuration options for the watcher
  * @returns Abort function to stop the watcher
  */
 export function startFileWatcher(
     file: string,
-    onFileChange: (file: string) => void,
+    onFileChange: (file: string, event: FileWatchEvent) => void,
     options: FileWatcherOptions = {}
 ): () => void {
     const abortController = new AbortController();
     const maxErrors = options.maxConsecutiveErrors ?? 10;
+    const debounceMs = options.debounceMs ?? 100;
     let consecutiveErrors = 0;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingEvent: FileWatchEvent | null = null;
+
+    /**
+     * Merges two file watcher events according to priority rules:
+     * - 'removed' has highest priority, then 'rename', then 'change'
+     * - If current is null, use incoming
+     * - If incoming is 'removed', always use 'removed'
+     * - If incoming is 'rename' and current is 'change', upgrade to 'rename'
+     * - Otherwise, keep current
+     */
+    function mergeFileWatchEvents(current: FileWatchEvent | null, incoming: FileWatchEvent): FileWatchEvent {
+        if (current === null) return incoming;
+        if (incoming === 'removed') return 'removed';
+        if (incoming === 'rename' && current === 'change') return 'rename';
+        return current;
+    }
+
+    const debouncedCallback = (eventType: FileWatchEvent): void => {
+        // Use mergeFileWatchEvents to determine the new pending event
+        pendingEvent = mergeFileWatchEvents(pendingEvent, eventType);
+
+        if (debounceTimer !== null) {
+            clearTimeout(debounceTimer);
+        }
+
+        debounceTimer = setTimeout(() => {
+            if (pendingEvent !== null && !abortController.signal.aborted) {
+                logger.debug(`[FILE_WATCHER] Emitting debounced event: ${pendingEvent} for ${file}`);
+                onFileChange(file, pendingEvent);
+            }
+            pendingEvent = null;
+            debounceTimer = null;
+        }, debounceMs);
+    };
 
     void (async (): Promise<void> => {
         while (consecutiveErrors < maxErrors) {
@@ -53,8 +104,25 @@ export function startFileWatcher(
                     }
                     // Reset error counter on successful event
                     consecutiveErrors = 0;
-                    logger.debug(`[FILE_WATCHER] File changed: ${file}`);
-                    onFileChange(file);
+
+                    // Determine the actual event type
+                    let watchEvent: FileWatchEvent;
+                    if (event.eventType === 'rename') {
+                        // For rename events, check if file still exists
+                        // exists = renamed TO this path, !exists = deleted or renamed away
+                        if (existsSync(file)) {
+                            watchEvent = 'rename';
+                            logger.debug(`[FILE_WATCHER] File renamed (still exists): ${file}`);
+                        } else {
+                            watchEvent = 'removed';
+                            logger.debug(`[FILE_WATCHER] File removed or renamed away: ${file}`);
+                        }
+                    } else {
+                        watchEvent = 'change';
+                        logger.debug(`[FILE_WATCHER] File content changed: ${file}`);
+                    }
+
+                    debouncedCallback(watchEvent);
                 }
             } catch (e: unknown) {
                 // Always check abort signal first to avoid unnecessary error processing
@@ -105,6 +173,12 @@ export function startFileWatcher(
     })();
 
     return () => {
+        // Clear any pending debounce timer
+        if (debounceTimer !== null) {
+            clearTimeout(debounceTimer);
+            debounceTimer = null;
+        }
+        pendingEvent = null;
         abortController.abort();
     };
 }

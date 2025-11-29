@@ -181,13 +181,23 @@ export class ApiMachineClient {
             });
 
             if (answer.result === 'success') {
-                this.machine.metadata = decrypt(this.machine.encryptionKey, this.machine.encryptionVariant, decodeBase64(answer.metadata));
-                this.machine.metadataVersion = answer.version;
-                logger.debug('[API MACHINE] Metadata updated successfully');
+                const decryptedMetadata = decrypt(this.machine.encryptionKey, this.machine.encryptionVariant, decodeBase64(answer.metadata));
+                if (decryptedMetadata === null) {
+                    logger.debug('[API MACHINE] [ERROR] Failed to decrypt metadata response - keeping local state');
+                } else {
+                    this.machine.metadata = decryptedMetadata;
+                    this.machine.metadataVersion = answer.version;
+                    logger.debug('[API MACHINE] Metadata updated successfully');
+                }
             } else if (answer.result === 'version-mismatch') {
                 if (answer.version > this.machine.metadataVersion) {
-                    this.machine.metadataVersion = answer.version;
-                    this.machine.metadata = decrypt(this.machine.encryptionKey, this.machine.encryptionVariant, decodeBase64(answer.metadata));
+                    const decryptedMetadata = decrypt(this.machine.encryptionKey, this.machine.encryptionVariant, decodeBase64(answer.metadata));
+                    if (decryptedMetadata === null) {
+                        logger.debug('[API MACHINE] [ERROR] Failed to decrypt metadata on version-mismatch - keeping local state');
+                    } else {
+                        this.machine.metadataVersion = answer.version;
+                        this.machine.metadata = decryptedMetadata;
+                    }
                 }
                 throw new Error('Metadata version mismatch'); // Triggers retry
             }
@@ -209,13 +219,23 @@ export class ApiMachineClient {
             });
 
             if (answer.result === 'success') {
-                this.machine.daemonState = decrypt(this.machine.encryptionKey, this.machine.encryptionVariant, decodeBase64(answer.daemonState));
-                this.machine.daemonStateVersion = answer.version;
-                logger.debug('[API MACHINE] Daemon state updated successfully');
+                const decryptedState = decrypt(this.machine.encryptionKey, this.machine.encryptionVariant, decodeBase64(answer.daemonState));
+                if (decryptedState === null) {
+                    logger.debug('[API MACHINE] [ERROR] Failed to decrypt daemon state response - keeping local state');
+                } else {
+                    this.machine.daemonState = decryptedState;
+                    this.machine.daemonStateVersion = answer.version;
+                    logger.debug('[API MACHINE] Daemon state updated successfully');
+                }
             } else if (answer.result === 'version-mismatch') {
                 if (answer.version > this.machine.daemonStateVersion) {
-                    this.machine.daemonStateVersion = answer.version;
-                    this.machine.daemonState = decrypt(this.machine.encryptionKey, this.machine.encryptionVariant, decodeBase64(answer.daemonState));
+                    const decryptedState = decrypt(this.machine.encryptionKey, this.machine.encryptionVariant, decodeBase64(answer.daemonState));
+                    if (decryptedState === null) {
+                        logger.debug('[API MACHINE] [ERROR] Failed to decrypt daemon state on version-mismatch - keeping local state');
+                    } else {
+                        this.machine.daemonStateVersion = answer.version;
+                        this.machine.daemonState = decryptedState;
+                    }
                 }
                 throw new Error('Daemon state version mismatch'); // Triggers retry
             }
@@ -292,14 +312,24 @@ export class ApiMachineClient {
                 // Handle machine metadata or daemon state updates from other clients (e.g., mobile app)
                 if (update.metadata) {
                     logger.debug('[API MACHINE] Received external metadata update');
-                    this.machine.metadata = decrypt(this.machine.encryptionKey, this.machine.encryptionVariant, decodeBase64(update.metadata.value));
-                    this.machine.metadataVersion = update.metadata.version;
+                    const decryptedMetadata = decrypt(this.machine.encryptionKey, this.machine.encryptionVariant, decodeBase64(update.metadata.value));
+                    if (decryptedMetadata === null) {
+                        logger.debug('[API MACHINE] [ERROR] Failed to decrypt external metadata update - skipping');
+                    } else {
+                        this.machine.metadata = decryptedMetadata;
+                        this.machine.metadataVersion = update.metadata.version;
+                    }
                 }
 
                 if (update.daemonState) {
                     logger.debug('[API MACHINE] Received external daemon state update');
-                    this.machine.daemonState = decrypt(this.machine.encryptionKey, this.machine.encryptionVariant, decodeBase64(update.daemonState.value));
-                    this.machine.daemonStateVersion = update.daemonState.version;
+                    const decryptedState = decrypt(this.machine.encryptionKey, this.machine.encryptionVariant, decodeBase64(update.daemonState.value));
+                    if (decryptedState === null) {
+                        logger.debug('[API MACHINE] [ERROR] Failed to decrypt external daemon state update - skipping');
+                    } else {
+                        this.machine.daemonState = decryptedState;
+                        this.machine.daemonStateVersion = update.daemonState.version;
+                    }
                 }
             } else if (updateType === 'new-machine') {
                 // Silently ignore new machine registrations (not relevant to this daemon)

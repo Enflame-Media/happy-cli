@@ -10,11 +10,11 @@ import { SpawnSessionOptions, SpawnSessionResult } from '@/modules/common/regist
 import { logger } from '@/ui/logger';
 import { authAndSetupMachineIfNeeded } from '@/ui/auth';
 import { configuration } from '@/configuration';
-import { startCaffeinate, stopCaffeinate } from '@/utils/caffeinate';
+import { startCaffeinate, stopCaffeinate, getCaffeinatePid } from '@/utils/caffeinate';
 import packageJson from '../../package.json';
 import { getEnvironmentInfo } from '@/ui/doctor';
 import { spawnHappyCLI } from '@/utils/spawnHappyCLI';
-import { writeDaemonState, DaemonLocallyPersistedState, readDaemonState, acquireDaemonLock } from '@/persistence';
+import { writeDaemonState, DaemonLocallyPersistedState, acquireDaemonLock } from '@/persistence';
 import { withRetry } from '@/utils/retry';
 
 import { cleanupDaemonState, isDaemonRunningCurrentlyInstalledHappyVersion, stopDaemon } from './controlClient';
@@ -104,6 +104,10 @@ export async function startDaemon(): Promise<void> {
   });
 
   logger.debug('[DAEMON RUN] Starting daemon process...');
+
+  // Ensure configuration directories exist before any file operations
+  configuration.ensureSetup();
+
   logger.debugLargeJson('[DAEMON RUN] Environment', getEnvironmentInfo());
 
   // Check if already running
@@ -246,19 +250,21 @@ export async function startDaemon(): Promise<void> {
 
         // Resolve authentication token if provided
         let extraEnv: Record<string, string> = {};
+        let codexTempDir: tmp.DirResult | undefined;
         if (options.token) {
           const token = options.token; // Assign to local variable for readability
           if (options.agent === 'codex') {
 
-            // Create a temporary directory for Codex
-            const codexHomeDir = tmp.dirSync();
+            // Create a temporary directory for Codex with cleanup callback
+            // unsafeCleanup: true allows removing non-empty directories
+            codexTempDir = tmp.dirSync({ unsafeCleanup: true });
 
             // Write the token to the temporary directory
-            await withRetry(() => fs.writeFile(join(codexHomeDir.name, 'auth.json'), token));
+            await withRetry(() => fs.writeFile(join(codexTempDir!.name, 'auth.json'), token));
 
             // Set the environment variable for Codex
             extraEnv = {
-              CODEX_HOME: codexHomeDir.name
+              CODEX_HOME: codexTempDir.name
             };
           } else { // Assuming claude
             extraEnv = {
@@ -311,7 +317,8 @@ export async function startDaemon(): Promise<void> {
           pid: happyProcess.pid,
           childProcess: happyProcess,
           directoryCreated,
-          message: directoryCreated ? `The path '${directory}' did not exist. We created a new folder and spawned a new session there.` : undefined
+          message: directoryCreated ? `The path '${directory}' did not exist. We created a new folder and spawned a new session there.` : undefined,
+          codexTempDir
         };
 
         pidToTrackedSession.set(happyProcess.pid, trackedSession);
@@ -398,6 +405,17 @@ export async function startDaemon(): Promise<void> {
             }
           }
 
+          // Clean up Codex temp directory before removing from tracking
+          // (onChildExited may not fire if we delete from map first)
+          if (session.codexTempDir) {
+            try {
+              session.codexTempDir.removeCallback();
+              logger.debug(`[DAEMON RUN] Cleaned up Codex temp directory for stopped session ${sessionId}`);
+            } catch (error) {
+              logger.debug(`[DAEMON RUN] Failed to cleanup Codex temp dir for session ${sessionId}:`, error);
+            }
+          }
+
           pidToTrackedSession.delete(pid);
           logger.debug(`[DAEMON RUN] Removed session ${sessionId} from tracking`);
           return true;
@@ -411,6 +429,18 @@ export async function startDaemon(): Promise<void> {
     // Handle child process exit
     const onChildExited = (pid: number) => {
       logger.debug(`[DAEMON RUN] Removing exited process PID ${pid} from tracking`);
+
+      // Clean up Codex temp directory if it exists (contains auth.json with sensitive token)
+      const session = pidToTrackedSession.get(pid);
+      if (session?.codexTempDir) {
+        try {
+          session.codexTempDir.removeCallback();
+          logger.debug(`[DAEMON RUN] Cleaned up Codex temp directory for PID ${pid}`);
+        } catch (error) {
+          logger.debug(`[DAEMON RUN] Failed to cleanup Codex temp dir for PID ${pid}:`, error);
+        }
+      }
+
       pidToTrackedSession.delete(pid);
     };
 
@@ -435,7 +465,8 @@ export async function startDaemon(): Promise<void> {
       httpPort: controlPort,
       startTime: new Date().toLocaleString(),
       startedWithCliVersion: packageJson.version,
-      daemonLogPath: logger.logFilePath
+      daemonLogPath: logger.logFilePath,
+      caffeinatePid: getCaffeinatePid()
     };
     writeDaemonState(fileState);
     logger.debug('[DAEMON RUN] Daemon state written');
@@ -494,13 +525,24 @@ export async function startDaemon(): Promise<void> {
       }
 
       // Prune stale sessions
-      for (const [pid, _] of pidToTrackedSession.entries()) {
+      for (const [pid, session] of pidToTrackedSession.entries()) {
         try {
           // Check if process is still alive (signal 0 doesn't kill, just checks)
           process.kill(pid, 0);
         } catch (error) {
-          // Process is dead, remove from tracking
+          // Process is dead, clean up resources and remove from tracking
           logger.debug(`[DAEMON RUN] Removing stale session with PID ${pid} (process no longer exists)`);
+
+          // Clean up Codex temp directory if it exists
+          if (session.codexTempDir) {
+            try {
+              session.codexTempDir.removeCallback();
+              logger.debug(`[DAEMON RUN] Cleaned up Codex temp directory for stale session PID ${pid}`);
+            } catch (cleanupError) {
+              logger.debug(`[DAEMON RUN] Failed to cleanup Codex temp dir for stale PID ${pid}:`, cleanupError);
+            }
+          }
+
           pidToTrackedSession.delete(pid);
         }
       }
@@ -536,15 +578,10 @@ export async function startDaemon(): Promise<void> {
         process.exit(0);
       }
 
-      // Before wrecklessly overriting the daemon state file, we should check if we are the ones who own it
-      // Race condition is possible, but thats okay for the time being :D
-      const daemonState = await readDaemonState();
-      if (daemonState && daemonState.pid !== process.pid) {
-        logger.debug('[DAEMON RUN] Somehow a different daemon was started without killing us. We should kill ourselves.')
-        requestShutdown('exception', 'A different daemon was started without killing us. We should kill ourselves.')
-      }
-
-      // Heartbeat
+      // Don't check state file PID - lock file is the authority (HAP-51)
+      // If we hold the lock, we own the daemon state
+      // State file is just informational for CLI tools
+      // The previous check-then-act pattern was a TOCTOU race condition
       try {
         const updatedState: DaemonLocallyPersistedState = {
           pid: process.pid,
@@ -552,14 +589,17 @@ export async function startDaemon(): Promise<void> {
           startTime: fileState.startTime,
           startedWithCliVersion: packageJson.version,
           lastHeartbeat: new Date().toLocaleString(),
-          daemonLogPath: fileState.daemonLogPath
+          daemonLogPath: fileState.daemonLogPath,
+          caffeinatePid: getCaffeinatePid()
         };
         writeDaemonState(updatedState);
         if (process.env.DEBUG) {
           logger.debug(`[DAEMON RUN] Health check completed at ${updatedState.lastHeartbeat}`);
         }
       } catch (error) {
-        logger.debug('[DAEMON RUN] Failed to write heartbeat', error);
+        // If we can't write state, something is very wrong
+        logger.debug('[DAEMON RUN] Failed to write heartbeat - shutting down', error);
+        requestShutdown('exception', 'Lost ability to write daemon state');
       }
 
       heartbeatRunning = false;

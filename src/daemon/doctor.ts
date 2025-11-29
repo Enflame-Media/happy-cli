@@ -121,3 +121,72 @@ export async function killRunawayHappyProcesses(): Promise<{ killed: number, err
 
   return { killed, errors };
 }
+
+
+/**
+ * Kill orphaned caffeinate process if one exists in daemon state.
+ * This handles the case where the daemon crashed and left caffeinate running.
+ */
+export async function killOrphanedCaffeinate(): Promise<{ killed: boolean, error?: string }> {
+  // Dynamically import to avoid circular dependencies
+  const { readDaemonState } = await import('@/persistence');
+  
+  try {
+    const daemonState = await readDaemonState();
+    
+    if (!daemonState?.caffeinatePid) {
+      return { killed: false };
+    }
+    
+    const caffeinatePid = daemonState.caffeinatePid;
+    
+    // Check if the caffeinate process is still running
+    try {
+      process.kill(caffeinatePid, 0);
+    } catch {
+      // Process doesn't exist, nothing to kill
+      return { killed: false };
+    }
+    
+    // Verify it's actually a caffeinate process before killing
+    let processes;
+    try {
+      processes = await psList();
+    } catch (error) {
+      // Cannot verify process name - safer to not kill
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return { killed: false, error: `Cannot verify process name: ${errorMessage}` };
+    }
+
+    const caffeinateProc = processes.find(p => p.pid === caffeinatePid);
+
+    if (!caffeinateProc || !caffeinateProc.name?.includes('caffeinate')) {
+      // PID exists but it's not caffeinate - might have been reused
+      // Don't kill it
+      return { killed: false };
+    }
+    
+    // Kill the orphaned caffeinate process
+    console.log(`Killing orphaned caffeinate process PID ${caffeinatePid}`);
+    process.kill(caffeinatePid, 'SIGTERM');
+    
+    // Wait and verify it's dead
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    try {
+      process.kill(caffeinatePid, 0);
+      // Still alive, force kill
+      console.log(`Caffeinate PID ${caffeinatePid} ignored SIGTERM, using SIGKILL`);
+      process.kill(caffeinatePid, 'SIGKILL');
+    } catch {
+      // Process is dead
+    }
+    
+    console.log(`Successfully killed orphaned caffeinate process PID ${caffeinatePid}`);
+    return { killed: true };
+  } catch (error) {
+    const errorMessage = (error as Error).message;
+    console.log(`Failed to kill orphaned caffeinate: ${errorMessage}`);
+    return { killed: false, error: errorMessage };
+  }
+}

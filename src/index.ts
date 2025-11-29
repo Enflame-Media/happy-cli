@@ -19,7 +19,7 @@ import packageJson from '../package.json'
 import { startDaemon } from './daemon/run'
 import { checkIfDaemonRunningAndCleanupStaleState, isDaemonRunningCurrentlyInstalledHappyVersion, stopDaemon } from './daemon/controlClient'
 import { getLatestDaemonLog } from './ui/logger'
-import { killRunawayHappyProcesses } from './daemon/doctor'
+import { killRunawayHappyProcesses, killOrphanedCaffeinate } from './daemon/doctor'
 import { install } from './daemon/install'
 import { uninstall } from './daemon/uninstall'
 import { ApiClient } from './api/api'
@@ -54,6 +54,16 @@ import { execFileSync } from 'node:child_process'
       if (result.errors.length > 0) {
         console.log('Errors:', result.errors)
       }
+
+      // Also clean up orphaned caffeinate process if any
+      const caffeinateResult = await killOrphanedCaffeinate()
+      if (caffeinateResult.killed) {
+        console.log('Cleaned up orphaned caffeinate process')
+      }
+      if (caffeinateResult.error) {
+        console.log('Caffeinate cleanup error:', caffeinateResult.error)
+      }
+
       process.exit(0)
     }
     await runDoctorCommand();

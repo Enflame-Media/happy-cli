@@ -2,6 +2,7 @@ import axios from 'axios'
 import { logger } from '@/ui/logger'
 import { Expo, ExpoPushMessage } from 'expo-server-sdk'
 import { getSafeErrorMessage } from '@/utils/errors'
+import { configuration } from '@/configuration'
 
 export interface PushToken {
     id: string
@@ -16,9 +17,9 @@ export class PushNotificationClient {
     private readonly baseUrl: string
     private readonly expo: Expo
 
-    constructor(token: string, baseUrl: string = 'https://api.cluster-fluster.com') {
+    constructor(token: string, baseUrl?: string) {
         this.token = token
-        this.baseUrl = baseUrl
+        this.baseUrl = baseUrl ?? configuration.serverUrl
         this.expo = new Expo()
     }
 

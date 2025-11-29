@@ -2,7 +2,7 @@ import { InvalidateSync } from "@/utils/sync";
 import { RawJSONLines, RawJSONLinesSchema } from "../types";
 import { readFile } from "node:fs/promises";
 import { logger } from "@/ui/logger";
-import { startFileWatcher } from "@/modules/watcher/startFileWatcher";
+import { startFileWatcher, FileWatchEvent } from "@/modules/watcher/startFileWatcher";
 import { getProjectPath } from "./path";
 import { withRetry } from "@/utils/retry";
 import { getValidatedSessionPath, isValidSessionId, InvalidSessionIdError } from "./sessionValidation";
@@ -76,7 +76,13 @@ export async function createSessionScanner(opts: {
             // Validate session ID before creating watcher path
             try {
                 const watchPath = getValidatedSessionPath(projectDir, currentSessionId);
-                watchers.set(currentSessionId, startFileWatcher(watchPath, () => { sync.invalidate(); }));
+                watchers.set(currentSessionId, startFileWatcher(watchPath, (_file: string, event: FileWatchEvent) => {
+                    // Handle all events - change, rename, and removed
+                    // For session files, we always want to sync to catch any updates
+                    // even if the file was renamed (session forking) or removed
+                    logger.debug(`[SESSION_SCANNER] File event: ${event} for session ${currentSessionId}`);
+                    sync.invalidate();
+                }));
             } catch (error) {
                 if (error instanceof InvalidSessionIdError) {
                     logger.debug(`[SESSION_SCANNER] Invalid session ID rejected for watcher: ${error.message}`);

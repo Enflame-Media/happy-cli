@@ -58,13 +58,39 @@ class Configuration {
 
     this.currentCliVersion = packageJson.version
 
+    // NOTE: Directory creation is now deferred to ensureSetup() for lazy initialization.
+    // This allows the configuration to be imported on read-only filesystems without failing.
+    // Callers that need to write files should call ensureSetup() first, or handle
+    // directory creation themselves (which most already do defensively).
+  }
+
+
+  /**
+   * Ensures the happy home directory and logs directory exist.
+   * This is called lazily by ensureSetup() to avoid side effects on import.
+   */
+  private ensureDirectories(): void {
     if (!existsSync(this.happyHomeDir)) {
       mkdirSync(this.happyHomeDir, { recursive: true })
     }
-    // Ensure directories exist
     if (!existsSync(this.logsDir)) {
       mkdirSync(this.logsDir, { recursive: true })
     }
+  }
+
+  /**
+   * Ensures the configuration directories exist.
+   * Call this before any write operations that need the happy home directory.
+   * 
+   * NOTE: Most write operations in persistence.ts already handle directory creation
+   * defensively, so calling this is optional for those code paths.
+   * This method is primarily useful for:
+   * - Initial setup/bootstrapping
+   * - Code paths that directly write to configuration directories
+   * - Ensuring directories exist before daemon startup
+   */
+  public ensureSetup(): void {
+    this.ensureDirectories()
   }
 }
 

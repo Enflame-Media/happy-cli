@@ -184,8 +184,13 @@ export function decryptLegacy(data: Uint8Array, secret: Uint8Array): any | null 
  * @param data - The data to encrypt
  * @param dataKey - The 32-byte AES-256 key
  * @returns The encrypted data bundle (nonce + ciphertext + auth tag)
+ * @throws Error if dataKey is not exactly 32 bytes
  */
 export function encryptWithDataKey(data: any, dataKey: Uint8Array): Uint8Array {
+  if (dataKey.length !== 32) {
+    throw new Error(`Invalid encryption key length: expected 32 bytes, got ${dataKey.length} bytes`);
+  }
+
   // Generate hybrid nonce (12 bytes for AES-GCM: 4 random + 8 counter)
   const nonce = generateHybridNonce(12);
   const cipher = createCipheriv('aes-256-gcm', dataKey, nonce);
@@ -213,8 +218,13 @@ export function encryptWithDataKey(data: any, dataKey: Uint8Array): Uint8Array {
  * @param bundle - The encrypted data bundle
  * @param dataKey - The 32-byte AES-256 key
  * @returns The decrypted data or null if decryption fails
+ * @throws Error if dataKey is not exactly 32 bytes
  */
 export function decryptWithDataKey(bundle: Uint8Array, dataKey: Uint8Array): any | null {
+  if (dataKey.length !== 32) {
+    throw new Error(`Invalid decryption key length: expected 32 bytes, got ${dataKey.length} bytes`);
+  }
+
   if (bundle.length < 1) {
     return null;
   }

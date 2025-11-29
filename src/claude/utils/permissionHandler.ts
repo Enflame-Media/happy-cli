@@ -181,15 +181,25 @@ export class PermissionHandler {
         }
 
         //
-        // Approval flow
+        // Approval flow with exponential backoff for tool call ID resolution
         //
 
         let toolCallId = this.resolveToolCallId(toolName, input);
-        if (!toolCallId) { // What if we got permission before tool call
-            await delay(1000);
-            toolCallId = this.resolveToolCallId(toolName, input);
+        if (!toolCallId) {
+            const maxAttempts = 7;
+            const baseDelay = 100;
+
+            for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                const delayMs = baseDelay * Math.pow(2, attempt);
+                await delay(delayMs);
+                toolCallId = this.resolveToolCallId(toolName, input);
+                if (toolCallId) break;
+
+                logger.debug(`Waiting for tool call ID, attempt ${attempt + 1}/${maxAttempts} (waited ${delayMs}ms)`);
+            }
+
             if (!toolCallId) {
-                throw new Error(`Could not resolve tool call ID for ${toolName}`);
+                throw new Error(`Could not resolve tool call ID for ${toolName} after ${maxAttempts} attempts`);
             }
         }
         return this.handlePermissionRequest(toolCallId, toolName, input, options.signal);

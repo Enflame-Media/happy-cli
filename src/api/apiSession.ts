@@ -164,6 +164,11 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                 if (data.body.t === 'new-message' && data.body.message.content.t === 'encrypted') {
                     const body = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(data.body.message.content.c));
 
+                    if (body === null) {
+                        logger.debug('[SOCKET] [UPDATE] [ERROR] Failed to decrypt message - skipping');
+                        return;
+                    }
+
                     logger.debugLargeJson('[SOCKET] [UPDATE] Received update:', body)
 
                     // Try to parse as user message first
@@ -186,7 +191,12 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                         await this.metadataLock.inLock(async () => {
                             // Re-check version inside lock to avoid stale updates
                             if (data.body.t === 'update-session' && data.body.metadata && data.body.metadata.version > this.metadataVersion) {
-                                this.metadata = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(data.body.metadata.value));
+                                const decryptedMetadata = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(data.body.metadata.value));
+                                if (decryptedMetadata === null) {
+                                    logger.debug('[SOCKET] [UPDATE] [ERROR] Failed to decrypt metadata - skipping update');
+                                    return;
+                                }
+                                this.metadata = decryptedMetadata;
                                 this.metadataVersion = data.body.metadata.version;
                             }
                         });
@@ -195,7 +205,16 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                         await this.agentStateLock.inLock(async () => {
                             // Re-check version inside lock to avoid stale updates
                             if (data.body.t === 'update-session' && data.body.agentState && data.body.agentState.version > this.agentStateVersion) {
-                                this.agentState = data.body.agentState.value ? decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(data.body.agentState.value)) : null;
+                                if (data.body.agentState.value) {
+                                    const decryptedAgentState = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(data.body.agentState.value));
+                                    if (decryptedAgentState === null) {
+                                        logger.debug('[SOCKET] [UPDATE] [ERROR] Failed to decrypt agent state - skipping update');
+                                        return;
+                                    }
+                                    this.agentState = decryptedAgentState;
+                                } else {
+                                    this.agentState = null;
+                                }
                                 this.agentStateVersion = data.body.agentState.version;
                             }
                         });
@@ -397,12 +416,22 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                 let updated = handler(this.metadata!); // Weird state if metadata is null - should never happen but here we are
                 const answer = await this.socket.emitWithAck('update-metadata', { sid: this.sessionId, expectedVersion: this.metadataVersion, metadata: encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, updated)) });
                 if (answer.result === 'success') {
-                    this.metadata = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.metadata));
-                    this.metadataVersion = answer.version;
+                    const decryptedMetadata = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.metadata));
+                    if (decryptedMetadata === null) {
+                        logger.debug('[API] [UPDATE-METADATA] [ERROR] Failed to decrypt metadata response - keeping local state');
+                    } else {
+                        this.metadata = decryptedMetadata;
+                        this.metadataVersion = answer.version;
+                    }
                 } else if (answer.result === 'version-mismatch') {
                     if (answer.version > this.metadataVersion) {
-                        this.metadataVersion = answer.version;
-                        this.metadata = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.metadata));
+                        const decryptedMetadata = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.metadata));
+                        if (decryptedMetadata === null) {
+                            logger.debug('[API] [UPDATE-METADATA] [ERROR] Failed to decrypt metadata on version-mismatch - keeping local state');
+                        } else {
+                            this.metadataVersion = answer.version;
+                            this.metadata = decryptedMetadata;
+                        }
                     }
                     throw new Error('Metadata version mismatch');
                 } else if (answer.result === 'error') {
@@ -423,13 +452,34 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                 let updated = handler(this.agentState || {});
                 const answer = await this.socket.emitWithAck('update-state', { sid: this.sessionId, expectedVersion: this.agentStateVersion, agentState: updated ? encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, updated)) : null });
                 if (answer.result === 'success') {
-                    this.agentState = answer.agentState ? decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.agentState)) : null;
-                    this.agentStateVersion = answer.version;
-                    logger.debug('Agent state updated', this.agentState);
+                    if (answer.agentState) {
+                        const decryptedState = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.agentState));
+                        if (decryptedState === null) {
+                            logger.debug('[API] [UPDATE-STATE] [ERROR] Failed to decrypt agent state response - keeping local state');
+                        } else {
+                            this.agentState = decryptedState;
+                            this.agentStateVersion = answer.version;
+                            logger.debug('Agent state updated', this.agentState);
+                        }
+                    } else {
+                        this.agentState = null;
+                        this.agentStateVersion = answer.version;
+                        logger.debug('Agent state updated', this.agentState);
+                    }
                 } else if (answer.result === 'version-mismatch') {
                     if (answer.version > this.agentStateVersion) {
-                        this.agentStateVersion = answer.version;
-                        this.agentState = answer.agentState ? decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.agentState)) : null;
+                        if (answer.agentState) {
+                            const decryptedState = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.agentState));
+                            if (decryptedState === null) {
+                                logger.debug('[API] [UPDATE-STATE] [ERROR] Failed to decrypt agent state on version-mismatch - keeping local state');
+                            } else {
+                                this.agentStateVersion = answer.version;
+                                this.agentState = decryptedState;
+                            }
+                        } else {
+                            this.agentStateVersion = answer.version;
+                            this.agentState = null;
+                        }
                     }
                     throw new Error('Agent state version mismatch');
                 } else if (answer.result === 'error') {
@@ -515,15 +565,28 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                     // Server has newer state - apply it
                     if (answer.version > this.agentStateVersion) {
                         const previousVersion = this.agentStateVersion;
-                        this.agentStateVersion = answer.version;
-                        this.agentState = answer.agentState
-                            ? decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.agentState))
-                            : null;
-                        agentStateUpdated = true;
-                        logger.debug('[API] Agent state reconciled from server', {
-                            previousVersion,
-                            newVersion: answer.version
-                        });
+                        if (answer.agentState) {
+                            const decryptedState = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.agentState));
+                            if (decryptedState === null) {
+                                logger.debug('[API] [RECONCILE] [ERROR] Failed to decrypt agent state from server - skipping reconciliation');
+                            } else {
+                                this.agentStateVersion = answer.version;
+                                this.agentState = decryptedState;
+                                agentStateUpdated = true;
+                                logger.debug('[API] Agent state reconciled from server', {
+                                    previousVersion,
+                                    newVersion: answer.version
+                                });
+                            }
+                        } else {
+                            this.agentStateVersion = answer.version;
+                            this.agentState = null;
+                            agentStateUpdated = true;
+                            logger.debug('[API] Agent state reconciled from server (null)', {
+                                previousVersion,
+                                newVersion: answer.version
+                            });
+                        }
                     } else {
                         logger.debug('[API] Server version not newer, skipping agent state update', {
                             localVersion: this.agentStateVersion,
@@ -568,13 +631,18 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                     // Server has newer metadata - apply it
                     if (answer.version > this.metadataVersion) {
                         const previousVersion = this.metadataVersion;
-                        this.metadataVersion = answer.version;
-                        this.metadata = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.metadata));
-                        metadataUpdated = true;
-                        logger.debug('[API] Metadata reconciled from server', {
-                            previousVersion,
-                            newVersion: answer.version
-                        });
+                        const decryptedMetadata = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.metadata));
+                        if (decryptedMetadata === null) {
+                            logger.debug('[API] [RECONCILE] [ERROR] Failed to decrypt metadata from server - skipping reconciliation');
+                        } else {
+                            this.metadataVersion = answer.version;
+                            this.metadata = decryptedMetadata;
+                            metadataUpdated = true;
+                            logger.debug('[API] Metadata reconciled from server', {
+                                previousVersion,
+                                newVersion: answer.version
+                            });
+                        }
                     } else {
                         logger.debug('[API] Server version not newer, skipping metadata update', {
                             localVersion: this.metadataVersion,

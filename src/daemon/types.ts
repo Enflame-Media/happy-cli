@@ -4,6 +4,7 @@
 
 import { Metadata } from '@/api/types';
 import { ChildProcess } from 'child_process';
+import type { DirResult } from 'tmp';
 
 /**
  * Session tracking for daemon
@@ -17,4 +18,6 @@ export interface TrackedSession {
   error?: string;
   directoryCreated?: boolean;
   message?: string;
+  /** Temporary directory created for Codex sessions (for auth.json storage). Cleaned up on session exit. */
+  codexTempDir?: DirResult;
 }

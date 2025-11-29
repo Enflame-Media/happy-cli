@@ -89,6 +89,13 @@ export class RpcHandlerManager {
             // Decrypt the incoming params
             const decryptedParams = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(request.params));
 
+            // Fail closed: reject requests with invalid encryption
+            if (decryptedParams === null) {
+                this.logger('[RPC] [ERROR] Failed to decrypt RPC params - rejecting request');
+                const errorResponse = { error: 'DECRYPTION_FAILED', message: 'Failed to decrypt request parameters' };
+                return encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, errorResponse));
+            }
+
             // Call the handler with abort signal
             // Use a noop signal if no abortController (for backwards compatibility with non-cancellable requests)
             const signal = abortController?.signal ?? new AbortController().signal;
@@ -174,6 +181,11 @@ export class RpcHandlerManager {
                 this.handleCancellation(data);
             };
         }
+
+        // Remove existing listener before adding to prevent accumulation on reconnection
+        // This is defensive - onSocketDisconnect should have removed it, but timing issues
+        // with Socket.IO reconnection can cause listener accumulation (MaxListenersExceededWarning)
+        socket.off('rpc-cancel', this.cancelHandler);
         socket.on('rpc-cancel', this.cancelHandler);
     }
 

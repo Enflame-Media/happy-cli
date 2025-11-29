@@ -372,8 +372,12 @@ export function query(config: {
     // Add timeout to escalate to SIGKILL if child ignores SIGTERM
     // This prevents zombie processes when the child has a SIGTERM handler that doesn't exit
     let killTimeout: NodeJS.Timeout | undefined
+    // Declare setKillTimeout at function scope so we can remove the listener in cleanup
+    // (fixes listener accumulation if same AbortSignal is reused across query() calls)
+    let setKillTimeout: (() => void) | undefined
+    let listenerAdded = false
     if (config.options?.abort) {
-        const setKillTimeout = () => {
+        setKillTimeout = () => {
             killTimeout = setTimeout(() => {
                 // Check if process is still alive (exitCode/signalCode are null until process exits)
                 if (child.exitCode === null && child.signalCode === null) {
@@ -389,6 +393,7 @@ export function query(config: {
             setKillTimeout()
         } else {
             config.options.abort.addEventListener('abort', setKillTimeout)
+            listenerAdded = true
         }
     }
 
@@ -425,7 +430,9 @@ export function query(config: {
 
     // Note: spawn() already handles abort via its signal option (line ~330)
     // Only register for process exit (not abort - that would cause double cleanup)
-    process.on('exit', cleanup)
+    // Use separate exitHandler reference so we can remove it later (prevents handler accumulation)
+    const exitHandler = () => cleanup()
+    process.on('exit', exitHandler)
 
     // Declare query before processExitPromise to avoid TDZ issues
     // (close event may fire before Query construction if child exits immediately)
@@ -475,6 +482,12 @@ export function query(config: {
     // Cleanup on exit
     processExitPromise.finally(() => {
         cleanup()
+        process.removeListener('exit', exitHandler)  // Remove handler to prevent accumulation
+        // Remove abort listener to prevent accumulation if AbortSignal is reused (HAP-173)
+        // Only remove if we actually added it (not if signal was already aborted)
+        if (listenerAdded && config.options?.abort && setKillTimeout) {
+            config.options.abort.removeEventListener('abort', setKillTimeout)
+        }
         if (process.env.CLAUDE_SDK_MCP_SERVERS) {
             delete process.env.CLAUDE_SDK_MCP_SERVERS
         }

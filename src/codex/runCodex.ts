@@ -22,7 +22,7 @@ import { startHappyServer } from '@/claude/utils/startHappyServer';
 import { MessageBuffer } from "@/ui/ink/messageBuffer";
 import { CodexDisplay } from "@/ui/ink/CodexDisplay";
 import { trimIdent } from "@/utils/trimIdent";
-import type { CodexSessionConfig } from './types';
+import { validateCodexModel, SUPPORTED_CODEX_MODELS, type CodexSessionConfig } from './types';
 import { notifyDaemonSessionStarted } from "@/daemon/controlClient";
 import { registerKillSessionHandler } from "@/claude/registerKillSessionHandler";
 import { delay } from "@/utils/time";
@@ -169,9 +169,23 @@ export async function runCodex(opts: {
         // Resolve model; explicit null resets to default (undefined)
         let messageModel = currentModel;
         if (message.meta?.hasOwnProperty('model')) {
-            messageModel = message.meta.model || undefined;
-            currentModel = messageModel;
-            logger.debug(`[Codex] Model updated from user message: ${messageModel || 'reset to default'}`);
+            const requestedModel = message.meta.model || undefined;
+            if (requestedModel) {
+                // Validate model before accepting it
+                if (!validateCodexModel(requestedModel)) {
+                    logger.warn(`[Codex] Invalid model requested: ${requestedModel}. Supported: ${SUPPORTED_CODEX_MODELS.join(', ')}`);
+                    // Don't update model, keep the previous valid one
+                } else {
+                    messageModel = requestedModel;
+                    currentModel = messageModel;
+                    logger.debug(`[Codex] Model updated from user message: ${messageModel}`);
+                }
+            } else {
+                // Reset to default
+                messageModel = undefined;
+                currentModel = undefined;
+                logger.debug(`[Codex] Model reset to default`);
+            }
         } else {
             logger.debug(`[Codex] User message received with no model override, using current: ${currentModel || 'default'}`);
         }
@@ -656,7 +670,16 @@ export async function runCodex(opts: {
                         config: { mcp_servers: mcpServers }
                     };
                     if (message.mode.model) {
-                        startConfig.model = message.mode.model;
+                        try {
+                            startConfig.model = validateCodexModel(message.mode.model);
+                        } catch (error) {
+                            const errorMsg = error instanceof Error ? error.message : 'Invalid model';
+                            logger.warn(`[Codex] ${errorMsg}`);
+                            messageBuffer.addMessage(`❌ ${errorMsg}`, 'status');
+                            session.sendSessionEvent({ type: 'message', message: errorMsg });
+                            // Skip this message and continue waiting for valid input
+                            continue;
+                        }
                     }
                     
                     // Check for resume file from multiple sources

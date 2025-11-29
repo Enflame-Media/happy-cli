@@ -100,6 +100,15 @@ export async function stopCaffeinate(): Promise<void> {
     }
 }
 
+
+/**
+ * Get the PID of the running caffeinate process.
+ * Used to persist the PID to daemon state for crash recovery.
+ */
+export function getCaffeinatePid(): number | undefined {
+    return caffeinateProcess?.pid
+}
+
 /**
  * Check if caffeinate is currently running
  */

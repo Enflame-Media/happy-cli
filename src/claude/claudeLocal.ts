@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { resolve, join } from "node:path";
 import { createInterface } from "node:readline";
 import { mkdirSync, existsSync } from "node:fs";
-import { watch } from "node:fs";
+import { watch, type FSWatcher } from "node:fs";
 import { logger } from "@/ui/logger";
 import { claudeCheckSession } from "./utils/claudeCheckSession";
 import { getProjectPath } from "./utils/path";
@@ -26,47 +26,22 @@ export async function claudeLocal(opts: {
     allowedTools?: string[]
 }) {
 
-    // Start a watcher for to detect the session id
+    // Prepare project directory for session detection
     const projectDir = getProjectPath(opts.path);
     mkdirSync(projectDir, { recursive: true });
-    const watcher = watch(projectDir);
-    let resolvedSessionId: string | null = null;
-    const detectedIdsRandomUUID = new Set<string>();
-    const detectedIdsFileSystem = new Set<string>();
-    watcher.on('change', (event, filename) => {
-        if (typeof filename === 'string' && filename.toLowerCase().endsWith('.jsonl')) {
-            logger.debug('change', event, filename);
-            const sessionId = filename.replace('.jsonl', '');
-
-            // SECURITY: Validate session ID format to prevent path traversal attacks
-            if (!isValidSessionId(sessionId)) {
-                logger.debug(`[ClaudeLocal] Invalid session ID format rejected from filesystem: ${sessionId.substring(0, 50)}`);
-                return;
-            }
-
-            if (detectedIdsFileSystem.has(sessionId)) {
-                return;
-            }
-            detectedIdsFileSystem.add(sessionId);
-
-            // Try to match
-            if (resolvedSessionId) {
-                return;
-            }
-
-            // Try to match with random UUID
-            if (detectedIdsRandomUUID.has(sessionId)) {
-                resolvedSessionId = sessionId;
-                opts.onSessionFound(sessionId);
-            }
-        }
-    });
 
     // Check if session is valid
     let startFrom = opts.sessionId;
     if (opts.sessionId && !claudeCheckSession(opts.sessionId, opts.path)) {
         startFrom = null;
     }
+
+    // Declare watcher outside try so finally can access it
+    // Created inside try to ensure cleanup on any early exit
+    let watcher: FSWatcher | undefined;
+    let resolvedSessionId: string | null = null;
+    const detectedIdsRandomUUID = new Set<string>();
+    const detectedIdsFileSystem = new Set<string>();
 
     // Thinking state
     let thinking = false;
@@ -83,6 +58,36 @@ export async function claudeLocal(opts: {
 
     // Spawn the process
     try {
+        // Start watcher inside try to ensure cleanup in finally
+        watcher = watch(projectDir);
+        watcher.on('change', (event, filename) => {
+            if (typeof filename === 'string' && filename.toLowerCase().endsWith('.jsonl')) {
+                logger.debug('change', event, filename);
+                const sessionId = filename.replace('.jsonl', '');
+
+                // SECURITY: Validate session ID format to prevent path traversal attacks
+                if (!isValidSessionId(sessionId)) {
+                    logger.debug(`[ClaudeLocal] Invalid session ID format rejected from filesystem: ${sessionId.substring(0, 50)}`);
+                    return;
+                }
+
+                if (detectedIdsFileSystem.has(sessionId)) {
+                    return;
+                }
+                detectedIdsFileSystem.add(sessionId);
+
+                // Try to match
+                if (resolvedSessionId) {
+                    return;
+                }
+
+                // Try to match with random UUID
+                if (detectedIdsRandomUUID.has(sessionId)) {
+                    resolvedSessionId = sessionId;
+                    opts.onSessionFound(sessionId);
+                }
+            }
+        });
         // Start the interactive process
         process.stdin.pause();
         await new Promise<void>((r, reject) => {
@@ -226,6 +231,7 @@ export async function claudeLocal(opts: {
                 child.on('exit', () => {
                     if (stopThinkingTimeout) {
                         clearTimeout(stopThinkingTimeout);
+
                     }
                     updateThinking(false);
                 });
@@ -245,7 +251,9 @@ export async function claudeLocal(opts: {
             });
         });
     } finally {
-        watcher.close();
+        if (watcher) {
+            watcher.close();
+        }
         process.stdin.resume();
         if (stopThinkingTimeout) {
             clearTimeout(stopThinkingTimeout);
