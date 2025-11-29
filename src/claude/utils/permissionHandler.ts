@@ -16,6 +16,11 @@ import { EnhancedMode, PermissionMode } from "../loop";
 import { getToolDescriptor } from "./getToolDescriptor";
 import { delay } from "@/utils/time";
 
+/**
+ * Default permission request timeout in milliseconds (30 seconds)
+ */
+const DEFAULT_PERMISSION_TIMEOUT = 30000;
+
 interface PermissionResponse {
     id: string;
     approved: boolean;
@@ -43,6 +48,8 @@ export class PermissionHandler {
     private allowedBashPrefixes = new Set<string>();
     private permissionMode: PermissionMode = 'default';
     private onPermissionRequestCallback?: (toolCallId: string) => void;
+    private onPermissionTimeoutCallback?: (requestId: string, toolName: string) => void;
+    private permissionTimeout: number = DEFAULT_PERMISSION_TIMEOUT;
 
     constructor(session: Session) {
         this.session = session;
@@ -52,11 +59,35 @@ export class PermissionHandler {
     /**
      * Set callback to trigger when permission request is made
      */
-    setOnPermissionRequest(callback: (toolCallId: string) => void) {
+    setOnPermissionRequest(callback: (toolCallId: string) => void): void {
         this.onPermissionRequestCallback = callback;
     }
 
-    handleModeChange(mode: PermissionMode) {
+    /**
+     * Set callback to trigger when permission request times out.
+     * This allows UI components to be notified and display appropriate feedback.
+     */
+    setOnPermissionTimeout(callback: (requestId: string, toolName: string) => void): void {
+        this.onPermissionTimeoutCallback = callback;
+    }
+
+    /**
+     * Set the permission request timeout in milliseconds.
+     * Default is 30000ms (30 seconds).
+     * @param timeoutMs Timeout value in milliseconds
+     */
+    setPermissionTimeout(timeoutMs: number): void {
+        this.permissionTimeout = timeoutMs;
+    }
+
+    /**
+     * Get the current permission timeout value in milliseconds.
+     */
+    getPermissionTimeout(): number {
+        return this.permissionTimeout;
+    }
+
+    handleModeChange(mode: PermissionMode): void {
         this.permissionMode = mode;
     }
 
@@ -165,7 +196,11 @@ export class PermissionHandler {
     }
 
     /**
-     * Handles individual permission requests
+     * Handles individual permission requests with timeout support.
+     *
+     * If no response is received within the configured timeout period,
+     * the request will be automatically denied with a 'timeout' status
+     * and the mobile app will be notified.
      */
     private async handlePermissionRequest(
         id: string,
@@ -174,21 +209,116 @@ export class PermissionHandler {
         signal: AbortSignal
     ): Promise<PermissionResult> {
         return new Promise<PermissionResult>((resolve, reject) => {
+            let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+            // Cleanup function to clear timeout and remove listeners
+            const cleanup = () => {
+                if (timeoutHandle) {
+                    clearTimeout(timeoutHandle);
+                    timeoutHandle = null;
+                }
+                signal.removeEventListener('abort', abortHandler);
+            };
+
+            // Timeout handler - triggers when permission request times out
+            const timeoutHandler = () => {
+                // Prevent further handling
+                this.pendingRequests.delete(id);
+                cleanup();
+
+                const timeoutMessage = `Permission request timed out after ${this.permissionTimeout / 1000} seconds`;
+                logger.debug(`Permission timeout for tool call ${id}: ${toolName}`);
+
+                // Update agent state to move request to completedRequests with timeout status
+                this.session.client.updateAgentState((currentState) => {
+                    const request = currentState.requests?.[id];
+                    if (!request) return currentState;
+
+                    const updatedRequests = { ...currentState.requests };
+                    delete updatedRequests[id];
+
+                    return {
+                        ...currentState,
+                        requests: updatedRequests,
+                        completedRequests: {
+                            ...currentState.completedRequests,
+                            [id]: {
+                                ...request,
+                                completedAt: Date.now(),
+                                status: 'timeout',
+                                reason: timeoutMessage
+                            }
+                        }
+                    };
+                });
+
+                // Send push notification about timeout
+                this.session.api.push().sendToAllDevices(
+                    'Permission Timeout',
+                    `Permission request for ${getToolName(toolName)} timed out`,
+                    {
+                        sessionId: this.session.client.sessionId,
+                        requestId: id,
+                        tool: toolName,
+                        type: 'permission_timeout'
+                    }
+                );
+
+                // Trigger timeout callback for UI feedback
+                if (this.onPermissionTimeoutCallback) {
+                    this.onPermissionTimeoutCallback(id, toolName);
+                }
+
+                // Resolve with deny and explicit timeout reason
+                resolve({
+                    behavior: 'deny',
+                    message: timeoutMessage
+                });
+            };
+
             // Set up abort signal handling
             const abortHandler = () => {
                 this.pendingRequests.delete(id);
+                cleanup();
+
+                // Update agent state to move request to completedRequests with canceled status
+                this.session.client.updateAgentState((currentState) => {
+                    const request = currentState.requests?.[id];
+                    if (!request) return currentState;
+
+                    const updatedRequests = { ...currentState.requests };
+                    delete updatedRequests[id];
+
+                    return {
+                        ...currentState,
+                        requests: updatedRequests,
+                        completedRequests: {
+                            ...currentState.completedRequests,
+                            [id]: {
+                                ...request,
+                                completedAt: Date.now(),
+                                status: 'canceled',
+                                reason: 'Aborted by signal'
+                            }
+                        }
+                    };
+                });
+
                 reject(new Error('Permission request aborted'));
             };
             signal.addEventListener('abort', abortHandler, { once: true });
 
+            // Set up timeout
+            timeoutHandle = setTimeout(timeoutHandler, this.permissionTimeout);
+
             // Store the pending request
             this.pendingRequests.set(id, {
                 resolve: (result: PermissionResult) => {
-                    signal.removeEventListener('abort', abortHandler);
+                    cleanup();
                     resolve(result);
                 },
                 reject: (error: Error) => {
-                    signal.removeEventListener('abort', abortHandler);
+                    cleanup();
                     reject(error);
                 },
                 toolName,
@@ -199,7 +329,7 @@ export class PermissionHandler {
             if (this.onPermissionRequestCallback) {
                 this.onPermissionRequestCallback(id);
             }
-            
+
             // Send push notification
             this.session.api.push().sendToAllDevices(
                 'Permission Request',
@@ -225,7 +355,7 @@ export class PermissionHandler {
                 }
             }));
 
-            logger.debug(`Permission request sent for tool call ${id}: ${toolName}`);
+            logger.debug(`Permission request sent for tool call ${id}: ${toolName} (timeout: ${this.permissionTimeout}ms)`);
         });
     }
 

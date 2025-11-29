@@ -6,9 +6,20 @@
  * Generic RPC handler function type
  * @template TRequest - The request data type
  * @template TResponse - The response data type
+ *
+ * Handlers receive:
+ * - data: The decrypted request parameters
+ * - signal: AbortSignal that can be checked via signal.aborted or listened to via signal.addEventListener('abort', ...)
+ *
+ * For long-running operations, handlers should:
+ * 1. Check signal.aborted before starting work
+ * 2. Periodically check signal.aborted during execution
+ * 3. Listen to signal.addEventListener('abort', ...) to stop async operations
+ * 4. Throw an error or return early if aborted
  */
 export type RpcHandler<TRequest = any, TResponse = any> = (
-    data: TRequest
+    data: TRequest,
+    signal: AbortSignal
 ) => TResponse | Promise<TResponse>;
 
 /**
@@ -22,6 +33,15 @@ export type RpcHandlerMap = Map<string, RpcHandler>;
 export interface RpcRequest {
     method: string;
     params: string; // Base64 encoded encrypted params
+    requestId?: string; // Unique request ID for cancellation tracking
+}
+
+/**
+ * RPC cancellation data from server
+ */
+export interface RpcCancelRequest {
+    requestId: string;
+    method: string;
 }
 
 /**

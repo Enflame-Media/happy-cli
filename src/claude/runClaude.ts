@@ -95,7 +95,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     try {
         logger.debug(`[START] Reporting session ${response.id} to daemon`);
         const result = await notifyDaemonSessionStarted(response.id, metadata);
-        if (result.error) {
+        if (!result.success) {
             logger.debug(`[START] Failed to report to daemon (may not be running):`, result.error);
         } else {
             logger.debug(`[START] Reported session ${response.id} to daemon`);

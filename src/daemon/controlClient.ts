@@ -10,82 +10,190 @@ import { projectPath } from '@/projectPath';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { configuration } from '@/configuration';
+import { validateTimeout } from '@/utils/validators';
 
-async function daemonPost(path: string, body?: any): Promise<{ error?: string } | any> {
+/**
+ * Result envelope type for daemon communication.
+ * Provides consistent, type-safe error handling across all daemon HTTP calls.
+ *
+ * Use discriminated union to force callers to check success before accessing data:
+ * ```typescript
+ * const result = await daemonPost<MyData>('/endpoint');
+ * if (!result.success) {
+ *   console.error(result.error);
+ *   return;
+ * }
+ * // TypeScript knows result.data is MyData here
+ * ```
+ */
+export type DaemonResponse<T> =
+  | { success: true; data: T }
+  | { success: false; error: string };
+
+/**
+ * Response type for /list endpoint
+ */
+export interface ListSessionsResponse {
+  children: Array<{
+    startedBy: string;
+    happySessionId: string;
+    pid: number;
+  }>;
+}
+
+/**
+ * Response type for /stop-session endpoint
+ */
+export interface StopSessionResponse {
+  success: boolean;
+}
+
+/**
+ * Response type for /spawn-session endpoint (success case)
+ */
+export interface SpawnSessionResponse {
+  success: boolean;
+  sessionId?: string;
+  approvedNewDirectoryCreation?: boolean;
+  // Error fields for non-200 responses
+  requiresUserApproval?: boolean;
+  actionRequired?: string;
+  directory?: string;
+  error?: string;
+}
+
+/**
+ * Response type for /session-started endpoint
+ */
+export interface SessionStartedResponse {
+  status: 'ok';
+}
+
+/**
+ * Response type for /stop endpoint
+ */
+export interface StopDaemonResponse {
+  status: string;
+}
+
+/**
+ * Read daemon auth token from file
+ * Returns null if file doesn't exist or can't be read
+ */
+function readDaemonAuthToken(): string | null {
+  try {
+    return readFileSync(configuration.daemonAuthTokenFile, 'utf-8').trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Make a POST request to the daemon HTTP server.
+ * Always returns a consistent DaemonResponse envelope for type safety.
+ */
+async function daemonPost<T>(path: string, body?: unknown): Promise<DaemonResponse<T>> {
   const state = await readDaemonState();
   if (!state?.httpPort) {
     const errorMessage = 'No daemon running, no state file found';
     logger.debug(`[CONTROL CLIENT] ${errorMessage}`);
-    return {
-      error: errorMessage
-    };
+    return { success: false, error: errorMessage };
   }
 
   try {
     process.kill(state.pid, 0);
-  } catch (error) {
+  } catch {
     const errorMessage = 'Daemon is not running, file is stale';
     logger.debug(`[CONTROL CLIENT] ${errorMessage}`);
-    return {
-      error: errorMessage
-    };
+    return { success: false, error: errorMessage };
+  }
+
+  const authToken = readDaemonAuthToken();
+  if (!authToken) {
+    const errorMessage = 'No daemon auth token found';
+    logger.debug(`[CONTROL CLIENT] ${errorMessage}`);
+    return { success: false, error: errorMessage };
   }
 
   try {
-    const timeout = process.env.HAPPY_DAEMON_HTTP_TIMEOUT ? parseInt(process.env.HAPPY_DAEMON_HTTP_TIMEOUT) : 10_000;
+    const timeout = validateTimeout(
+      process.env.HAPPY_DAEMON_HTTP_TIMEOUT,
+      'HAPPY_DAEMON_HTTP_TIMEOUT',
+      { defaultValue: 10_000, min: 100, max: 300_000 }
+    );
     const response = await fetch(`http://127.0.0.1:${state.httpPort}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body || {}),
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Daemon-Auth': authToken
+      },
+      body: JSON.stringify(body ?? {}),
       // Mostly increased for stress test
       signal: AbortSignal.timeout(timeout)
     });
-    
+
     if (!response.ok) {
       const errorMessage = `Request failed: ${path}, HTTP ${response.status}`;
       logger.debug(`[CONTROL CLIENT] ${errorMessage}`);
-      return {
-        error: errorMessage
-      };
+      return { success: false, error: errorMessage };
     }
-    
-    return await response.json();
+
+    const data = await response.json() as T;
+    return { success: true, data };
   } catch (error) {
     const errorMessage = `Request failed: ${path}, ${error instanceof Error ? error.message : 'Unknown error'}`;
     logger.debug(`[CONTROL CLIENT] ${errorMessage}`);
-    return {
-      error: errorMessage
-    }
+    return { success: false, error: errorMessage };
   }
 }
 
+/**
+ * Notify daemon that a session has started.
+ * Called by CLI sessions to register themselves with the daemon.
+ */
 export async function notifyDaemonSessionStarted(
   sessionId: string,
   metadata: Metadata
-): Promise<{ error?: string } | any> {
-  return await daemonPost('/session-started', {
+): Promise<DaemonResponse<SessionStartedResponse>> {
+  return daemonPost<SessionStartedResponse>('/session-started', {
     sessionId,
     metadata
   });
 }
 
-export async function listDaemonSessions(): Promise<any[]> {
-  const result = await daemonPost('/list');
-  return result.children || [];
+/**
+ * List all sessions tracked by the daemon.
+ * Returns the full DaemonResponse envelope for proper error handling.
+ */
+export async function listDaemonSessions(): Promise<DaemonResponse<ListSessionsResponse>> {
+  return daemonPost<ListSessionsResponse>('/list');
 }
 
-export async function stopDaemonSession(sessionId: string): Promise<boolean> {
-  const result = await daemonPost('/stop-session', { sessionId });
-  return result.success || false;
+/**
+ * Stop a specific session by its happy session ID.
+ * Returns the full DaemonResponse envelope for proper error handling.
+ */
+export async function stopDaemonSession(sessionId: string): Promise<DaemonResponse<StopSessionResponse>> {
+  return daemonPost<StopSessionResponse>('/stop-session', { sessionId });
 }
 
-export async function spawnDaemonSession(directory: string, sessionId?: string): Promise<any> {
-  const result = await daemonPost('/spawn-session', { directory, sessionId });
-  return result;
+/**
+ * Spawn a new session in the specified directory.
+ * Returns the full DaemonResponse envelope for proper error handling.
+ */
+export async function spawnDaemonSession(
+  directory: string,
+  sessionId?: string
+): Promise<DaemonResponse<SpawnSessionResponse>> {
+  return daemonPost<SpawnSessionResponse>('/spawn-session', { directory, sessionId });
 }
 
-export async function stopDaemonHttp(): Promise<void> {
-  await daemonPost('/stop');
+/**
+ * Request the daemon to stop via HTTP.
+ * Returns the full DaemonResponse envelope for proper error handling.
+ */
+export async function stopDaemonHttp(): Promise<DaemonResponse<StopDaemonResponse>> {
+  return daemonPost<StopDaemonResponse>('/stop');
 }
 
 /**
@@ -193,7 +301,7 @@ export async function cleanupDaemonState(): Promise<void> {
   }
 }
 
-export async function stopDaemon() {
+export async function stopDaemon(): Promise<void> {
   try {
     const state = await readDaemonState();
     if (!state) {
@@ -204,22 +312,25 @@ export async function stopDaemon() {
     logger.debug(`Stopping daemon with PID ${state.pid}`);
 
     // Try HTTP graceful stop
-    try {
-      await stopDaemonHttp();
-
+    const result = await stopDaemonHttp();
+    if (result.success) {
       // Wait for daemon to die
-      await waitForProcessDeath(state.pid, 2000);
-      logger.debug('Daemon stopped gracefully via HTTP');
-      return;
-    } catch (error) {
-      logger.debug('HTTP stop failed, will force kill', error);
+      try {
+        await waitForProcessDeath(state.pid, 2000);
+        logger.debug('Daemon stopped gracefully via HTTP');
+        return;
+      } catch {
+        logger.debug('Daemon did not die after HTTP stop, will force kill');
+      }
+    } else {
+      logger.debug(`HTTP stop failed: ${result.error}, will force kill`);
     }
 
     // Force kill
     try {
       process.kill(state.pid, 'SIGKILL');
       logger.debug('Force killed daemon');
-    } catch (error) {
+    } catch {
       logger.debug('Daemon already dead');
     }
   } catch (error) {

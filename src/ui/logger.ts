@@ -6,11 +6,26 @@
  */
 
 import chalk from 'chalk'
-import { appendFileSync } from 'fs'
+import { appendFileSync, renameSync } from 'fs'
 import { configuration } from '@/configuration'
-import { existsSync, readdirSync, statSync } from 'node:fs'
-import { join, basename } from 'node:path'
+import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs'
+import { join, basename, dirname } from 'node:path'
 import { readDaemonState } from '@/persistence'
+
+/**
+ * Log rotation configuration
+ * - MAX_LOG_SIZE: Rotate when file exceeds this size (default 10MB)
+ * - MAX_LOG_FILES: Keep this many rotated files before deleting (default 5)
+ */
+const MAX_LOG_SIZE = 10 * 1024 * 1024 // 10MB
+const MAX_LOG_FILES = 5
+
+/**
+ * Type guard for Node.js system errors with error codes
+ */
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error && typeof (error as NodeJS.ErrnoException).code === 'string'
+}
 
 /**
  * Consistent date/time formatting functions
@@ -46,15 +61,206 @@ function getSessionLogPath(): string {
 
 class Logger {
   private dangerouslyUnencryptedServerLoggingUrl: string | undefined
+  private fileLoggingEnabled: boolean = true
+  private fileLoggingWarningShown: boolean = false
+  private currentLogSize: number = 0
+  private isRotating: boolean = false
+  private pendingWrites: string[] = []
+
+  /**
+   * Tracks write errors that occurred during file logging.
+   * In production, write failures are silent to avoid disturbing Claude sessions,
+   * but we still want to be able to report them at session end for debugging.
+   */
+  private logWriteErrors: { timestamp: Date; error: Error; context?: string }[] = []
 
   constructor(
     public readonly logFilePath = getSessionLogPath()
   ) {
     // Remote logging enabled only when explicitly set with server URL
-    if (process.env.DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING 
+    if (process.env.DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING
       && process.env.HAPPY_SERVER_URL) {
       this.dangerouslyUnencryptedServerLoggingUrl = process.env.HAPPY_SERVER_URL
       console.log(chalk.yellow('[REMOTE LOGGING] Sending logs to server for AI debugging'))
+    }
+
+    // Attempt to initialize log directory
+    this.tryInitializeLogDirectory()
+
+    // Initialize current log size from existing file
+    this.initializeLogSize()
+  }
+
+  /**
+   * Initializes the currentLogSize from an existing log file, if present.
+   * Called during construction to ensure accurate size tracking from the start.
+   */
+  private initializeLogSize(): void {
+    try {
+      if (existsSync(this.logFilePath)) {
+        const stats = statSync(this.logFilePath)
+        this.currentLogSize = stats.size
+      }
+    } catch {
+      // If we can't read the size, start from 0 - rotation will still work
+      this.currentLogSize = 0
+    }
+  }
+
+  /**
+   * Attempts to create the log directory and verify write access.
+   * If this fails (permission denied, disk full, etc.), file logging is disabled
+   * and the logger falls back to console-only mode for errors.
+   *
+   * Common failure scenarios:
+   * - EACCES/EPERM: No write permissions to parent directory
+   * - ENOSPC/EDQUOT: Disk full or quota exceeded
+   * - EROFS: Read-only file system
+   * - EEXIST: Race condition with another process
+   */
+  private tryInitializeLogDirectory(): void {
+    try {
+      const logDir = dirname(this.logFilePath)
+
+      // Attempt to create directory if it doesn't exist
+      if (!existsSync(logDir)) {
+        mkdirSync(logDir, { recursive: true })
+      }
+
+      // Verify we can write to the directory by attempting a test write
+      // This catches permission issues even when directory exists
+      const testPath = join(logDir, '.write-test')
+      try {
+        writeFileSync(testPath, '')
+        unlinkSync(testPath)
+      } catch (cleanupErr) {
+        // If write succeeded but cleanup failed, try to remove anyway
+        // This handles edge cases where file was created but unlinkSync throws
+        try {
+          if (existsSync(testPath)) {
+            unlinkSync(testPath)
+          }
+        } catch {
+          // Ignore cleanup errors - the write test succeeded which is what matters
+        }
+
+        // Re-throw the original error if write failed
+        if (isNodeError(cleanupErr) &&
+            (cleanupErr.code === 'EACCES' || cleanupErr.code === 'EPERM' ||
+             cleanupErr.code === 'ENOSPC' || cleanupErr.code === 'EDQUOT')) {
+          throw cleanupErr
+        }
+      }
+
+      // Initialization successful - fileLoggingEnabled already true from initialization
+    } catch (err) {
+      this.fileLoggingEnabled = false
+      this.warnFileLoggingDisabled(err)
+    }
+  }
+
+  /**
+   * Shows a one-time warning when file logging is disabled.
+   * Includes error code information if available for better diagnostics.
+   */
+  private warnFileLoggingDisabled(err: unknown): void {
+    if (this.fileLoggingWarningShown) return
+    this.fileLoggingWarningShown = true
+
+    let errorMessage: string
+    if (isNodeError(err)) {
+      errorMessage = `${err.code}: ${err.message}`
+    } else if (err instanceof Error) {
+      errorMessage = err.message
+    } else {
+      errorMessage = String(err)
+    }
+
+    console.error(
+      chalk.yellow('[WARNING] Unable to initialize log directory, logging to console only:'),
+      chalk.gray(errorMessage)
+    )
+  }
+
+  /**
+   * Rotates log files when the current log exceeds MAX_LOG_SIZE.
+   *
+   * Rotation strategy (atomic to prevent log loss):
+   * 1. Set isRotating flag to buffer incoming writes
+   * 2. Delete the oldest rotated file if at MAX_LOG_FILES
+   * 3. Rename files in reverse order: .4 -> .5, .3 -> .4, .2 -> .3, .1 -> .2
+   * 4. Rename current log to .1
+   * 5. Reset currentLogSize to 0 (new file will be created on next write)
+   * 6. Flush any buffered writes
+   * 7. Clear isRotating flag
+   *
+   * File naming: logfile.log -> logfile.log.1, logfile.log.2, etc.
+   */
+  private rotateLogsIfNeeded(): void {
+    if (this.currentLogSize <= MAX_LOG_SIZE) {
+      return
+    }
+
+    if (this.isRotating) {
+      return // Prevent re-entrant rotation
+    }
+
+    this.isRotating = true
+
+    try {
+      const basePath = this.logFilePath
+
+      // Delete oldest file if we're at the limit
+      const oldestPath = `${basePath}.${MAX_LOG_FILES}`
+      if (existsSync(oldestPath)) {
+        try {
+          unlinkSync(oldestPath)
+        } catch (err) {
+          if (isNodeError(err) && err.code === 'ENOENT') {
+            // File does not exist, not an error
+          } else if (process.env.DEBUG) {
+            console.error('[DEV] Failed to delete oldest log file:', err)
+          }
+        }
+      }
+
+      // Rotate existing numbered files in reverse order
+      for (let i = MAX_LOG_FILES - 1; i >= 1; i--) {
+        const fromPath = `${basePath}.${i}`
+        const toPath = `${basePath}.${i + 1}`
+        if (existsSync(fromPath)) {
+          renameSync(fromPath, toPath)
+        }
+      }
+
+      // Rename current log file to .1
+      if (existsSync(basePath)) {
+        renameSync(basePath, `${basePath}.1`)
+      }
+
+      // Reset size counter - new file will be created on next appendFileSync
+      this.currentLogSize = 0
+
+      // Flush any pending writes that accumulated during rotation
+      const pendingWrites = this.pendingWrites
+      this.pendingWrites = []
+
+      for (const logLine of pendingWrites) {
+        try {
+          appendFileSync(this.logFilePath, logLine)
+          this.currentLogSize += Buffer.byteLength(logLine, 'utf8')
+        } catch {
+          // If write fails during flush, the writes are lost but logger continues
+        }
+      }
+    } catch (err) {
+      // Rotation failed - log continues to the same file
+      // This is acceptable: we'd rather have oversized logs than lose entries
+      if (process.env.DEBUG) {
+        console.error('[DEV] Log rotation failed:', err)
+      }
+    } finally {
+      this.isRotating = false
     }
   }
 
@@ -146,6 +352,71 @@ class Logger {
   getLogPath(): string {
     return this.logFilePath
   }
+
+  /**
+   * Returns whether file logging is currently enabled.
+   * File logging may be disabled if:
+   * - The log directory couldn't be created (EACCES, EPERM)
+   * - Write permissions are not available (EACCES, EPERM, EROFS)
+   * - Disk is full or quota exceeded (ENOSPC, EDQUOT)
+   * - A write operation failed during runtime
+   */
+  isFileLoggingEnabled(): boolean {
+    return this.fileLoggingEnabled
+  }
+
+  /**
+   * Returns write errors that occurred during file logging operations.
+   * These errors are silently captured in production to avoid disturbing Claude sessions,
+   * but can be retrieved at session end to diagnose logging issues.
+   *
+   * @returns Array of write errors with timestamp and optional context
+   */
+  getLogWriteErrors(): ReadonlyArray<{ timestamp: Date; error: Error; context?: string }> {
+    return this.logWriteErrors
+  }
+
+  /**
+   * Returns true if any write errors occurred during this session.
+   * Useful for quick checks at session end to determine if error reporting is needed.
+   */
+  hasLogWriteErrors(): boolean {
+    return this.logWriteErrors.length > 0
+  }
+
+  /**
+   * Clears accumulated write errors.
+   * Typically called after errors have been reported to avoid duplicate reporting.
+   */
+  clearLogWriteErrors(): void {
+    this.logWriteErrors = []
+  }
+
+  /**
+   * Reports write errors that occurred during the session.
+   * Call this at session end to inform the user of any logging issues.
+   *
+   * @returns true if errors were reported, false if no errors occurred
+   */
+  reportWriteErrorsIfAny(): boolean {
+    if (!this.hasLogWriteErrors()) {
+      return false
+    }
+
+    const errors = this.getLogWriteErrors()
+    console.error(chalk.yellow(`\n[Logger] ${errors.length} write error(s) occurred during this session:`))
+
+    for (const { timestamp, error, context } of errors) {
+      const timeStr = timestamp.toLocaleTimeString('en-US', { hour12: false })
+      const contextStr = context ? ` (while logging: "${context}...")` : ''
+      console.error(chalk.gray(`  [${timeStr}] ${error.message}${contextStr}`))
+    }
+
+    console.error(chalk.gray(`  Log file: ${this.logFilePath}`))
+    console.error(chalk.gray(`  Some log entries may have been lost. Check disk space and permissions.\n`))
+
+    return true
+  }
   
   private logToConsole(level: 'debug' | 'error' | 'info' | 'warn', prefix: string, message: string, ...args: unknown[]): void {
     switch (level) {
@@ -199,11 +470,33 @@ class Logger {
     }
   }
 
+  /**
+   * Writes a log entry to file with graceful degradation on failure.
+   * Falls back to console logging for error-level messages if file logging is unavailable.
+   *
+   * Error handling:
+   * - Checks fileLoggingEnabled flag before attempting write
+   * - Catches ENOSPC/EDQUOT (disk full) and disables file logging
+   * - Catches EACCES/EPERM (permission denied) and disables file logging
+   * - Catches EROFS (read-only filesystem) and disables file logging
+   * - Catches ENOENT (directory deleted after init) and disables file logging
+   * - Re-throws in DEBUG mode for other errors to aid debugging
+   * - Silently fails in production for unknown errors to avoid disturbing Claude
+   */
   private logToFile(prefix: string, message: string, ...args: unknown[]): void {
-    const logLine = `${prefix} ${message} ${args.map(arg => 
+    // If file logging is disabled, fall back to console for error-level messages only
+    if (!this.fileLoggingEnabled) {
+      // Only log errors to console to avoid disturbing Claude sessions
+      if (prefix.includes('ERROR') || prefix.includes('WARN')) {
+        console.error(chalk.gray(`[fallback] ${prefix}`), message, ...args)
+      }
+      return
+    }
+
+    const logLine = `${prefix} ${message} ${args.map(arg =>
       typeof arg === 'string' ? arg : JSON.stringify(arg)
     ).join(' ')}\n`
-    
+
     // Send to remote server if configured
     if (this.dangerouslyUnencryptedServerLoggingUrl) {
       // Determine log level from prefix
@@ -216,16 +509,63 @@ class Logger {
         // Silently ignore remote logging errors to prevent loops
       })
     }
-    
-    // Handle async file path
+
+    // If rotation is in progress, buffer the write to prevent loss
+    if (this.isRotating) {
+      this.pendingWrites.push(logLine)
+      return
+    }
+
+    // Handle file write with graceful degradation
     try {
       appendFileSync(this.logFilePath, logLine)
+      // Track size for rotation (using byte length for accuracy with UTF-8)
+      this.currentLogSize += Buffer.byteLength(logLine, 'utf8')
+      // Check if rotation is needed after this write
+      this.rotateLogsIfNeeded()
     } catch (appendError) {
+      // Use type guard for safe error code access
+      if (isNodeError(appendError)) {
+        const errorCode = appendError.code
+
+        // Disable file logging for recoverable errors
+        if (errorCode === 'ENOSPC' || errorCode === 'EDQUOT') {
+          // Disk full or quota exceeded
+          this.fileLoggingEnabled = false
+          this.warnFileLoggingDisabled(appendError)
+          return
+        } else if (errorCode === 'EACCES' || errorCode === 'EPERM') {
+          // Permission denied
+          this.fileLoggingEnabled = false
+          this.warnFileLoggingDisabled(appendError)
+          return
+        } else if (errorCode === 'EROFS') {
+          // Read-only file system
+          this.fileLoggingEnabled = false
+          this.warnFileLoggingDisabled(appendError)
+          return
+        } else if (errorCode === 'ENOENT') {
+          // File or directory doesn't exist (may have been deleted)
+          this.fileLoggingEnabled = false
+          this.warnFileLoggingDisabled(appendError)
+          return
+        }
+      }
+
+      // For unexpected errors in DEBUG mode, throw to aid debugging
       if (process.env.DEBUG) {
         console.error('[DEV MODE ONLY THROWING] Failed to append to log file:', appendError)
         throw appendError
       }
-      // In production, fail silently to avoid disturbing Claude session
+
+      // In production for other errors, track the error but fail silently to avoid disturbing Claude session
+      // These errors can be retrieved at session end via getLogWriteErrors()
+      const error = appendError instanceof Error ? appendError : new Error(String(appendError))
+      this.logWriteErrors.push({
+        timestamp: new Date(),
+        error,
+        context: message.substring(0, 100) // Truncate to avoid large memory usage
+      })
     }
   }
 }

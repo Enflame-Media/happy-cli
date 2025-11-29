@@ -1554,9 +1554,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@rollup/rollup-linux-x64-gnu@npm:4.53.3":
+"@rollup/rollup-linux-x64-gnu@npm:4.53.3, @rollup/rollup-linux-x64-gnu@npm:^4.53.3":
   version: 4.53.3
   resolution: "@rollup/rollup-linux-x64-gnu@npm:4.53.3"
+  checksum: 10c0/565815b5bb6712d5121e5f896fe4dc823b64cd52712f9d6e569f32cbb68cbc75224f22e1cdf0c12a449225c3e6b88893e57d9f48ef79d8c453794112129a2ce8
   conditions: os=linux & cpu=x64 & libc=glibc
   languageName: node
   linkType: hard
@@ -3747,6 +3748,7 @@ __metadata:
     "@eslint/compat": "npm:^2.0.0"
     "@fastify/swagger": "npm:^9.6.1"
     "@modelcontextprotocol/sdk": "npm:^1.22.0"
+    "@rollup/rollup-linux-x64-gnu": "npm:^4.53.3"
     "@stablelib/base64": "npm:^2.0.1"
     "@stablelib/hex": "npm:^2.0.1"
     "@types/cross-spawn": "npm:^6.0.6"

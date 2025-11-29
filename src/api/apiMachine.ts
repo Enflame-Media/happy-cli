@@ -12,6 +12,13 @@ import { encodeBase64, decodeBase64, encrypt, decrypt } from './encryption';
 import { backoff } from '@/utils/time';
 import { RpcHandlerManager } from './rpc/RpcHandlerManager';
 
+// Keep-alive timing configuration (prevents thundering herd on reconnection)
+const KEEP_ALIVE_BASE_INTERVAL_MS = 20000; // 20 seconds base interval
+const KEEP_ALIVE_JITTER_MAX_MS = 5000; // 0-5 seconds random jitter
+
+// Socket.io reconnection jitter configuration
+const RECONNECTION_RANDOMIZATION_FACTOR = 0.5; // 0.5 means delay varies ±50%
+
 interface ServerToDaemonEvents {
     update: (data: Update) => void;
     'rpc-request': (data: { method: string, params: string }, callback: (response: string) => void) => void;
@@ -78,6 +85,8 @@ type MachineRpcHandlers = {
 export class ApiMachineClient {
     private socket!: Socket<ServerToDaemonEvents, DaemonToServerEvents>;
     private keepAliveInterval: NodeJS.Timeout | null = null;
+
+    private isShuttingDown = false;
     private rpcHandlerManager: RpcHandlerManager;
 
     constructor(
@@ -101,7 +110,7 @@ export class ApiMachineClient {
         requestShutdown
     }: MachineRpcHandlers) {
         // Register spawn session handler
-        this.rpcHandlerManager.registerHandler('spawn-happy-session', async (params: any) => {
+        this.rpcHandlerManager.registerHandler('spawn-happy-session', async (params: any, signal) => {
             const { directory, sessionId, machineId, approvedNewDirectoryCreation, agent, token } = params || {};
             logger.debug(`[API MACHINE] Spawning session with params: ${JSON.stringify(params)}`);
 
@@ -126,7 +135,7 @@ export class ApiMachineClient {
         });
 
         // Register stop session handler  
-        this.rpcHandlerManager.registerHandler('stop-session', (params: any) => {
+        this.rpcHandlerManager.registerHandler('stop-session', (params: any, signal) => {
             const { sessionId } = params || {};
 
             if (!sessionId) {
@@ -143,7 +152,7 @@ export class ApiMachineClient {
         });
 
         // Register stop daemon handler
-        this.rpcHandlerManager.registerHandler('stop-daemon', () => {
+        this.rpcHandlerManager.registerHandler('stop-daemon', (params, signal) => {
             logger.debug('[API MACHINE] Received stop-daemon RPC request');
 
             // Trigger shutdown callback after a delay
@@ -227,7 +236,9 @@ export class ApiMachineClient {
             path: '/v1/updates',
             reconnection: true,
             reconnectionDelay: 1000,
-            reconnectionDelayMax: 5000
+            reconnectionDelayMax: 5000,
+            // Add randomization to prevent thundering herd on reconnection
+            randomizationFactor: RECONNECTION_RANDOMIZATION_FACTOR
         });
 
         this.socket.on('connect', () => {
@@ -315,8 +326,30 @@ export class ApiMachineClient {
     }
 
     private startKeepAlive() {
-        this.stopKeepAlive();
+        // Double-check and clear any existing interval to prevent leaks
+        if (this.keepAliveInterval) {
+            clearInterval(this.keepAliveInterval);
+            this.keepAliveInterval = null;
+            logger.debug('[API MACHINE] Cleared existing keep-alive before starting new one');
+        }
+
+        // Add random jitter to prevent thundering herd when multiple clients reconnect
+        // Each client will have a unique interval, spreading out the load
+        const jitter = Math.random() * KEEP_ALIVE_JITTER_MAX_MS;
+        const interval = KEEP_ALIVE_BASE_INTERVAL_MS + jitter;
+
         this.keepAliveInterval = setInterval(() => {
+            // Prevent keep-alive after shutdown
+            if (this.isShuttingDown) {
+                logger.debug('[API MACHINE] Skipping keep-alive: shutting down');
+                return;
+            }
+            // Skip if socket is not connected (prevents errors during reconnection)
+            if (!this.socket?.connected) {
+                logger.debug('[API MACHINE] Socket not connected, skipping keep-alive');
+                return;
+            }
+
             const payload = {
                 machineId: this.machine.id,
                 time: Date.now()
@@ -325,8 +358,8 @@ export class ApiMachineClient {
                 logger.debugLargeJson(`[API MACHINE] Emitting machine-alive`, payload);
             }
             this.socket.emit('machine-alive', payload);
-        }, 20000);
-        logger.debug('[API MACHINE] Keep-alive started (20s interval)');
+        }, interval);
+        logger.debug(`[API MACHINE] Keep-alive started (${Math.round(interval / 1000)}s interval with jitter)`);
     }
 
     private stopKeepAlive() {
@@ -338,11 +371,23 @@ export class ApiMachineClient {
     }
 
     shutdown() {
+        // Ensure shutdown is idempotent - safe to call multiple times
+        if (this.isShuttingDown) {
+            logger.debug('[API MACHINE] Shutdown already in progress, skipping');
+            return;
+        }
+        this.isShuttingDown = true;
+        
         logger.debug('[API MACHINE] Shutting down');
         this.stopKeepAlive();
         if (this.socket) {
+            // Remove all socket event listeners before closing
+            this.socket.removeAllListeners();
+            // Remove manager-level listeners (e.g., socket.io.on('error'))
+            this.socket.io.removeAllListeners();
             this.socket.close();
             logger.debug('[API MACHINE] Socket closed');
         }
+        // Removed call to this.rpcHandlerManager.clearHandlers() as method may not exist
     }
 }

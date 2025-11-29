@@ -65,6 +65,60 @@ function getLogFiles(logDir: string): { file: string, path: string, modified: Da
 }
 
 /**
+ * Result of daemon status check for JSON output
+ */
+export interface DaemonStatusResult {
+    running: boolean;
+    pid: number | null;
+    httpPort: number | null;
+    startTime: string | null;
+    cliVersion: string | null;
+    lastHeartbeat: string | null;
+    daemonLogPath: string | null;
+    stateFileLocation: string;
+    stale: boolean;
+}
+
+/**
+ * Get daemon status as a structured object for JSON output.
+ * Suitable for scripting and automation.
+ * 
+ * Exit codes when used with --json:
+ * - 0: Daemon is running
+ * - 1: Daemon is not running
+ * - 2: Daemon state is stale (process not found)
+ */
+export async function getDaemonStatusJson(): Promise<{ status: DaemonStatusResult; exitCode: number }> {
+    const isRunning = await checkIfDaemonRunningAndCleanupStaleState();
+    const state = await readDaemonState();
+
+    const result: DaemonStatusResult = {
+        running: isRunning,
+        pid: state?.pid ?? null,
+        httpPort: state?.httpPort ?? null,
+        startTime: state?.startTime ?? null,
+        cliVersion: state?.startedWithCliVersion ?? null,
+        lastHeartbeat: state?.lastHeartbeat ?? null,
+        daemonLogPath: state?.daemonLogPath ?? null,
+        stateFileLocation: configuration.daemonStateFile,
+        stale: state !== null && !isRunning,
+    };
+
+    // Exit codes for scripting:
+    // 0 = running, 1 = not running, 2 = stale state
+    let exitCode: number;
+    if (isRunning) {
+        exitCode = 0;
+    } else if (result.stale) {
+        exitCode = 2;
+    } else {
+        exitCode = 1;
+    }
+
+    return { status: result, exitCode };
+}
+
+/**
  * Run doctor command specifically for daemon diagnostics
  */
 export async function runDoctorDaemon(): Promise<void> {

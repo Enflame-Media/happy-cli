@@ -8,12 +8,13 @@
 
 
 import chalk from 'chalk'
-import { runClaude, StartOptions } from '@/claude/runClaude'
+import { runClaude } from '@/claude/runClaude'
+import { parseCliArgs } from '@/parsers/cliArgs'
+import { validateStartedBy } from '@/utils/validators'
 import { logger } from './ui/logger'
-import { readCredentials } from './persistence'
+import { readCredentials, readDaemonState } from './persistence'
 import { authAndSetupMachineIfNeeded } from './ui/auth'
 import packageJson from '../package.json'
-import { z } from 'zod'
 import { startDaemon } from './daemon/run'
 import { checkIfDaemonRunningAndCleanupStaleState, isDaemonRunningCurrentlyInstalledHappyVersion, stopDaemon } from './daemon/controlClient'
 import { getLatestDaemonLog } from './ui/logger'
@@ -21,7 +22,7 @@ import { killRunawayHappyProcesses } from './daemon/doctor'
 import { install } from './daemon/install'
 import { uninstall } from './daemon/uninstall'
 import { ApiClient } from './api/api'
-import { runDoctorCommand } from './ui/doctor'
+import { runDoctorCommand, getDaemonStatusJson } from './ui/doctor'
 import { listDaemonSessions, stopDaemonSession } from './daemon/controlClient'
 import { handleAuthCommand } from './commands/auth'
 import { handleConnectCommand } from './commands/connect'
@@ -86,7 +87,7 @@ import { execFileSync } from 'node:child_process'
       let startedBy: 'daemon' | 'terminal' | undefined = undefined;
       for (let i = 1; i < args.length; i++) {
         if (args[i] === '--started-by') {
-          startedBy = args[++i] as 'daemon' | 'terminal';
+          startedBy = validateStartedBy(args[++i]);
         }
       }
       
@@ -133,32 +134,49 @@ import { execFileSync } from 'node:child_process'
     const daemonSubcommand = args[1]
 
     if (daemonSubcommand === 'list') {
-      try {
-        const sessions = await listDaemonSessions()
+      const result = await listDaemonSessions()
 
-        if (sessions.length === 0) {
-          console.log('No active sessions this daemon is aware of (they might have been started by a previous version of the daemon)')
-        } else {
-          console.log('Active sessions:')
-          console.log(JSON.stringify(sessions, null, 2))
-        }
-      } catch (error) {
-        console.log('No daemon running')
+      if (!result.success) {
+        console.log(chalk.yellow(`Cannot list sessions: ${result.error}`))
+        return
+      }
+
+      const sessions = result.data.children
+      if (sessions.length === 0) {
+        console.log('No active sessions this daemon is aware of (they might have been started by a previous version of the daemon)')
+      } else {
+        console.log('Active sessions:')
+        console.log(JSON.stringify(sessions, null, 2))
       }
       return
 
     } else if (daemonSubcommand === 'stop-session') {
       const sessionId = args[2]
       if (!sessionId) {
-        console.error('Session ID required')
+        console.error(chalk.red('Error: Session ID required'))
+        console.log(chalk.gray('Usage: happy daemon stop-session <session-id>'))
+        console.log(chalk.gray('List active sessions with: happy daemon list'))
         process.exit(1)
       }
 
-      try {
-        const success = await stopDaemonSession(sessionId)
-        console.log(success ? 'Session stopped' : 'Failed to stop session')
-      } catch (error) {
-        console.log('No daemon running')
+      // Validate UUID format
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      if (!uuidRegex.test(sessionId)) {
+        console.error(chalk.red(`Error: Invalid session ID format: ${sessionId}`))
+        console.log(chalk.gray('Expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'))
+        console.log(chalk.gray('List active sessions with: happy daemon list'))
+        process.exit(1)
+      }
+
+      const result = await stopDaemonSession(sessionId)
+      if (!result.success) {
+        console.error(chalk.red(`✗ Cannot stop session: ${result.error}`))
+        console.log(chalk.gray('Is the daemon running? Start with: happy daemon start'))
+      } else if (result.data.success) {
+        console.log(chalk.green(`✓ Session ${sessionId} stopped`))
+      } else {
+        console.error(chalk.red(`✗ Failed to stop session ${sessionId}`))
+        console.log(chalk.gray('Session may have already stopped'))
       }
       return
 
@@ -173,7 +191,8 @@ import { execFileSync } from 'node:child_process'
 
       // Wait for daemon to write state file (up to 5 seconds)
       let started = false;
-      for (let i = 0; i < 50; i++) {
+      const maxAttempts = 50;
+      for (let i = 0; i < maxAttempts; i++) {
         if (await checkIfDaemonRunningAndCleanupStaleState()) {
           started = true;
           break;
@@ -182,9 +201,31 @@ import { execFileSync } from 'node:child_process'
       }
 
       if (started) {
-        console.log('Daemon started successfully');
+        console.log(chalk.green('✓ Daemon started successfully'));
+        console.log(chalk.gray('  Check status: happy daemon status'));
       } else {
-        console.error('Failed to start daemon');
+        console.error(chalk.red('✗ Daemon did not start within 5 seconds'));
+
+        // Try to get logs for debugging
+        const latestLog = await getLatestDaemonLog();
+        if (latestLog) {
+          console.log(chalk.yellow('Check logs for details:'));
+          console.log(chalk.gray(`  ${latestLog.path}`));
+        }
+
+        // Check if process exists but is slow to initialize
+        const state = await readDaemonState();
+        if (state?.pid) {
+          try {
+            process.kill(state.pid, 0);
+            console.log(chalk.yellow('Daemon process exists but is taking longer to initialize'));
+            console.log(chalk.gray('Wait and check: happy daemon status'));
+            process.exit(0);
+          } catch {
+            // Process doesn't exist, true failure
+          }
+        }
+
         process.exit(1);
       }
       process.exit(0);
@@ -195,9 +236,19 @@ import { execFileSync } from 'node:child_process'
       await stopDaemon()
       process.exit(0)
     } else if (daemonSubcommand === 'status') {
-      // Show daemon-specific doctor output
-      await runDoctorCommand('daemon')
-      process.exit(0)
+      // Check for --json flag (can appear as args[2] or anywhere in remaining args)
+      const useJson = args.slice(2).includes('--json');
+
+      if (useJson) {
+        // Machine-readable JSON output with appropriate exit codes
+        const { status, exitCode } = await getDaemonStatusJson();
+        console.log(JSON.stringify(status, null, 2));
+        process.exit(exitCode);
+      } else {
+        // Human-readable output (existing behavior)
+        await runDoctorCommand('daemon');
+        process.exit(0);
+      }
     } else if (daemonSubcommand === 'logs') {
       // Simply print the path to the latest daemon log file
       const latest = await getLatestDaemonLog()
@@ -228,11 +279,17 @@ ${chalk.bold('happy daemon')} - Daemon management
 ${chalk.bold('Usage:')}
   happy daemon start              Start the daemon (detached)
   happy daemon stop               Stop the daemon (sessions stay alive)
-  happy daemon status             Show daemon status
+  happy daemon status             Show daemon status (human-readable)
+  happy daemon status --json      Show daemon status (JSON for scripting)
   happy daemon list               List active sessions
 
-  If you want to kill all happy related processes run 
+  If you want to kill all happy related processes run
   ${chalk.cyan('happy doctor clean')}
+
+${chalk.bold('Exit Codes for "daemon status --json":')}
+  0 - Daemon is running
+  1 - Daemon is not running
+  2 - Stale state (state file exists but process not found)
 
 ${chalk.bold('Note:')} The daemon runs in the background and manages Claude sessions.
 
@@ -242,49 +299,8 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('happy doctor c
     return;
   } else {
 
-    // If the first argument is claude, remove it
-    if (args.length > 0 && args[0] === 'claude') {
-      args.shift()
-    }
-
-    // Parse command line arguments for main command
-    const options: StartOptions = {}
-    let showHelp = false
-    let showVersion = false
-    const unknownArgs: string[] = [] // Collect unknown args to pass through to claude
-
-    for (let i = 0; i < args.length; i++) {
-      const arg = args[i]
-
-      if (arg === '-h' || arg === '--help') {
-        showHelp = true
-        // Also pass through to claude
-        unknownArgs.push(arg)
-      } else if (arg === '-v' || arg === '--version') {
-        showVersion = true
-        // Also pass through to claude (will show after our version)
-        unknownArgs.push(arg)
-      } else if (arg === '--happy-starting-mode') {
-        options.startingMode = z.enum(['local', 'remote']).parse(args[++i])
-      } else if (arg === '--yolo') {
-        // Shortcut for --dangerously-skip-permissions
-        unknownArgs.push('--dangerously-skip-permissions')
-      } else if (arg === '--started-by') {
-        options.startedBy = args[++i] as 'daemon' | 'terminal'
-      } else {
-        // Pass unknown arguments through to claude
-        unknownArgs.push(arg)
-        // Check if this arg expects a value (simplified check for common patterns)
-        if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
-          unknownArgs.push(args[++i])
-        }
-      }
-    }
-
-    // Add unknown args to claudeArgs
-    if (unknownArgs.length > 0) {
-      options.claudeArgs = [...(options.claudeArgs || []), ...unknownArgs]
-    }
+    // Parse command line arguments
+    const { options, showHelp, showVersion } = parseCliArgs(args)
 
     // Show help
     if (showHelp) {

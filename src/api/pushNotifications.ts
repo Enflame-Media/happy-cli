@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { logger } from '@/ui/logger'
 import { Expo, ExpoPushMessage } from 'expo-server-sdk'
+import { getSafeErrorMessage } from '@/utils/errors'
 
 export interface PushToken {
     id: string
@@ -46,7 +47,7 @@ export class PushNotificationClient {
             return response.data.tokens
         } catch (error) {
             logger.debug('[PUSH] [ERROR] Failed to fetch push tokens:', error)
-            throw new Error(`Failed to fetch push tokens: ${error instanceof Error ? error.message : 'Unknown error'}`)
+            throw new Error(`Failed to fetch push tokens: ${getSafeErrorMessage(error)}`)
         }
     }
 

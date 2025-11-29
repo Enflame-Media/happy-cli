@@ -336,6 +336,37 @@ export function query(config: {
         }
     }) as ChildProcessWithoutNullStreams
 
+    // Add timeout to escalate to SIGKILL if child ignores SIGTERM
+    // This prevents zombie processes when the child has a SIGTERM handler that doesn't exit
+    let killTimeout: NodeJS.Timeout | undefined
+    if (config.options?.abort) {
+        const setKillTimeout = () => {
+            killTimeout = setTimeout(() => {
+                // Check if process is still alive (exitCode/signalCode are null until process exits)
+                if (child.exitCode === null && child.signalCode === null) {
+                    logDebug('[SDK Query] Child did not respond to SIGTERM, sending SIGKILL')
+                    child.kill('SIGKILL')
+                }
+            }, 5000) // 5 second grace period before SIGKILL
+        }
+
+        // In Node.js, addEventListener doesn't fire for already-aborted signals
+        // so we need to check and set up the timeout immediately in that case
+        if (config.options.abort.aborted) {
+            setKillTimeout()
+        } else {
+            config.options.abort.addEventListener('abort', setKillTimeout)
+        }
+    }
+
+    // Clear kill timeout when child exits (whether via SIGTERM or otherwise)
+    child.on('exit', () => {
+        if (killTimeout) {
+            clearTimeout(killTimeout)
+            killTimeout = undefined
+        }
+    })
+
     // Handle stdin
     let childStdin: Writable | null = null
     if (typeof prompt === 'string') {
@@ -359,39 +390,58 @@ export function query(config: {
         }
     }
 
-    config.options?.abort?.addEventListener('abort', cleanup)
+    // Note: spawn() already handles abort via its signal option (line ~330)
+    // Only register for process exit (not abort - that would cause double cleanup)
     process.on('exit', cleanup)
 
+    // Declare query before processExitPromise to avoid TDZ issues
+    // (close event may fire before Query construction if child exits immediately)
+    let query: Query | undefined
+
     // Handle process exit
-    const processExitPromise = new Promise<void>((resolve) => {
+    const processExitPromise = new Promise<void>((resolve, reject) => {
         child.on('close', (code) => {
             if (config.options?.abort?.aborted) {
-                query.setError(new AbortError('Claude Code process aborted by user'))
+                const error = new AbortError('Claude Code process aborted by user')
+                if (query) {
+                    query.setError(error)
+                } else {
+                    reject(error)
+                }
+                return
             }
             if (code !== 0) {
-                query.setError(new Error(`Claude Code process exited with code ${code}`))
-            } else {
-                resolve()
+                const error = new Error(`Claude Code process exited with code ${code}`)
+                if (query) {
+                    query.setError(error)
+                } else {
+                    reject(error)
+                }
+                return
             }
+            resolve()
         })
     })
 
     // Create query instance
-    const query = new Query(childStdin, child.stdout, processExitPromise, canCallTool)
+    query = new Query(childStdin, child.stdout, processExitPromise, canCallTool)
 
     // Handle process errors
     child.on('error', (error) => {
-        if (config.options?.abort?.aborted) {
-            query.setError(new AbortError('Claude Code process aborted by user'))
-        } else {
-            query.setError(new Error(`Failed to spawn Claude Code process: ${error.message}`))
+        const err = config.options?.abort?.aborted
+            ? new AbortError('Claude Code process aborted by user')
+            : new Error(`Failed to spawn Claude Code process: ${error.message}`)
+
+        // query should always be defined here since error events fire after spawn,
+        // but check defensively to match the pattern used in close handler
+        if (query) {
+            query.setError(err)
         }
     })
 
     // Cleanup on exit
     processExitPromise.finally(() => {
         cleanup()
-        config.options?.abort?.removeEventListener('abort', cleanup)
         if (process.env.CLAUDE_SDK_MCP_SERVERS) {
             delete process.env.CLAUDE_SDK_MCP_SERVERS
         }

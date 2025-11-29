@@ -1,6 +1,6 @@
 /**
  * Permission Handler for Codex tool approval integration
- * 
+ *
  * Handles tool permission requests and responses for Codex sessions.
  * Simpler than Claude's permission handler since we get tool IDs directly.
  */
@@ -8,6 +8,11 @@
 import { logger } from "@/ui/logger";
 import { ApiSessionClient } from "@/api/apiSession";
 import { AgentState } from "@/api/types";
+
+/**
+ * Default permission request timeout in milliseconds (30 seconds)
+ */
+const DEFAULT_PERMISSION_TIMEOUT = 30000;
 
 interface PermissionResponse {
     id: string;
@@ -29,6 +34,8 @@ interface PermissionResult {
 export class CodexPermissionHandler {
     private pendingRequests = new Map<string, PendingRequest>();
     private session: ApiSessionClient;
+    private onPermissionTimeoutCallback?: (requestId: string, toolName: string) => void;
+    private permissionTimeout: number = DEFAULT_PERMISSION_TIMEOUT;
 
     constructor(session: ApiSessionClient) {
         this.session = session;
@@ -36,7 +43,35 @@ export class CodexPermissionHandler {
     }
 
     /**
-     * Handle a tool permission request
+     * Set callback to trigger when permission request times out.
+     * This allows UI components to be notified and display appropriate feedback.
+     */
+    setOnPermissionTimeout(callback: (requestId: string, toolName: string) => void): void {
+        this.onPermissionTimeoutCallback = callback;
+    }
+
+    /**
+     * Set the permission request timeout in milliseconds.
+     * Default is 30000ms (30 seconds).
+     * @param timeoutMs Timeout value in milliseconds
+     */
+    setPermissionTimeout(timeoutMs: number): void {
+        this.permissionTimeout = timeoutMs;
+    }
+
+    /**
+     * Get the current permission timeout value in milliseconds.
+     */
+    getPermissionTimeout(): number {
+        return this.permissionTimeout;
+    }
+
+    /**
+     * Handle a tool permission request with timeout support.
+     *
+     * If no response is received within the configured timeout period,
+     * the request will be automatically denied with a 'timeout' status.
+     *
      * @param toolCallId - The unique ID of the tool call
      * @param toolName - The name of the tool being called
      * @param input - The input parameters for the tool
@@ -48,10 +83,69 @@ export class CodexPermissionHandler {
         input: unknown
     ): Promise<PermissionResult> {
         return new Promise<PermissionResult>((resolve, reject) => {
-            // Store the pending request
+            let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+            // Cleanup function to clear timeout
+            const cleanup = () => {
+                if (timeoutHandle) {
+                    clearTimeout(timeoutHandle);
+                    timeoutHandle = null;
+                }
+            };
+
+            // Timeout handler - triggers when permission request times out
+            const timeoutHandler = () => {
+                // Prevent further handling
+                this.pendingRequests.delete(toolCallId);
+                cleanup();
+
+                const timeoutMessage = `Permission request timed out after ${this.permissionTimeout / 1000} seconds`;
+                logger.debug(`[Codex] Permission timeout for tool: ${toolName} (${toolCallId})`);
+
+                // Update agent state to move request to completedRequests with timeout status
+                this.session.updateAgentState((currentState) => {
+                    const request = currentState.requests?.[toolCallId];
+                    if (!request) return currentState;
+
+                    const { [toolCallId]: _, ...remainingRequests } = currentState.requests || {};
+
+                    return {
+                        ...currentState,
+                        requests: remainingRequests,
+                        completedRequests: {
+                            ...currentState.completedRequests,
+                            [toolCallId]: {
+                                ...request,
+                                completedAt: Date.now(),
+                                status: 'timeout',
+                                reason: timeoutMessage
+                            }
+                        }
+                    } satisfies AgentState;
+                });
+
+                // Trigger timeout callback for UI feedback
+                if (this.onPermissionTimeoutCallback) {
+                    this.onPermissionTimeoutCallback(toolCallId, toolName);
+                }
+
+                // Resolve with denied decision on timeout
+                resolve({ decision: 'denied' });
+            };
+
+            // Set up timeout
+            timeoutHandle = setTimeout(timeoutHandler, this.permissionTimeout);
+
+            // Store the pending request with cleanup on resolve/reject
             this.pendingRequests.set(toolCallId, {
-                resolve,
-                reject,
+                resolve: (result: PermissionResult) => {
+                    cleanup();
+                    resolve(result);
+                },
+                reject: (error: Error) => {
+                    cleanup();
+                    reject(error);
+                },
                 toolName,
                 input
             });
@@ -81,7 +175,7 @@ export class CodexPermissionHandler {
                 }
             }));
 
-            logger.debug(`[Codex] Permission request sent for tool: ${toolName} (${toolCallId})`);
+            logger.debug(`[Codex] Permission request sent for tool: ${toolName} (${toolCallId}) (timeout: ${this.permissionTimeout}ms)`);
         });
     }
 
@@ -91,7 +185,7 @@ export class CodexPermissionHandler {
     private setupRpcHandler(): void {
         this.session.rpcHandlerManager.registerHandler<PermissionResponse, void>(
             'permission',
-            async (response) => {
+            async (response, signal) => {
                 // console.log(`[Codex] Permission response received:`, response);
 
                 const pending = this.pendingRequests.get(response.id);

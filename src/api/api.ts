@@ -8,6 +8,7 @@ import { PushNotificationClient } from './pushNotifications';
 import { configuration } from '@/configuration';
 import chalk from 'chalk';
 import { Credentials } from '@/persistence';
+import { getSafeErrorMessage } from '@/utils/errors';
 
 export class ApiClient {
 
@@ -88,7 +89,7 @@ export class ApiClient {
       return session;
     } catch (error) {
       logger.debug('[API] [ERROR] Failed to get or create session:', error);
-      throw new Error(`Failed to get or create session: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to get or create session: ${getSafeErrorMessage(error)}`);
     }
   }
 
@@ -121,43 +122,48 @@ export class ApiClient {
     }
 
     // Create machine
-    const response = await axios.post(
-      `${configuration.serverUrl}/v1/machines`,
-      {
-        id: opts.machineId,
-        metadata: encodeBase64(encrypt(encryptionKey, encryptionVariant, opts.metadata)),
-        daemonState: opts.daemonState ? encodeBase64(encrypt(encryptionKey, encryptionVariant, opts.daemonState)) : undefined,
-        dataEncryptionKey: dataEncryptionKey ? encodeBase64(dataEncryptionKey) : undefined
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${this.credential.token}`,
-          'Content-Type': 'application/json'
+    try {
+      const response = await axios.post(
+        `${configuration.serverUrl}/v1/machines`,
+        {
+          id: opts.machineId,
+          metadata: encodeBase64(encrypt(encryptionKey, encryptionVariant, opts.metadata)),
+          daemonState: opts.daemonState ? encodeBase64(encrypt(encryptionKey, encryptionVariant, opts.daemonState)) : undefined,
+          dataEncryptionKey: dataEncryptionKey ? encodeBase64(dataEncryptionKey) : undefined
         },
-        timeout: 60000 // 1 minute timeout for very bad network connections
+        {
+          headers: {
+            'Authorization': `Bearer ${this.credential.token}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 60000 // 1 minute timeout for very bad network connections
+        }
+      );
+
+      if (response.status !== 200) {
+        console.error(chalk.red('[API] Failed to create machine'));
+        console.log(chalk.yellow('[API] Failed to create machine. Most likely you have re-authenticated, but you still have a machine associated with the old account. Now we are trying to re-associate the machine with the new account. That is not allowed. Please run \'happy doctor clean\' to clean up your happy state, and try your original command again. Please create an issue on github if this is causing you problems. We apologize for the inconvenience.'));
+        process.exit(1);
       }
-    );
 
-    if (response.status !== 200) {
-      console.error(chalk.red(`[API] Failed to create machine: ${response.statusText}`));
-      console.log(chalk.yellow(`[API] Failed to create machine: ${response.statusText}, most likely you have re-authenticated, but you still have a machine associated with the old account. Now we are trying to re-associate the machine with the new account. That is not allowed. Please run 'happy doctor clean' to clean up your happy state, and try your original command again. Please create an issue on github if this is causing you problems. We apologize for the inconvenience.`));
-      process.exit(1);
+      const raw = response.data.machine;
+      logger.debug(`[API] Machine ${opts.machineId} registered/updated with server`);
+
+      // Return decrypted machine like we do for sessions
+      const machine: Machine = {
+        id: raw.id,
+        encryptionKey: encryptionKey,
+        encryptionVariant: encryptionVariant,
+        metadata: raw.metadata ? decrypt(encryptionKey, encryptionVariant, decodeBase64(raw.metadata)) : null,
+        metadataVersion: raw.metadataVersion || 0,
+        daemonState: raw.daemonState ? decrypt(encryptionKey, encryptionVariant, decodeBase64(raw.daemonState)) : null,
+        daemonStateVersion: raw.daemonStateVersion || 0,
+      };
+      return machine;
+    } catch (error) {
+      logger.debug('[API] [ERROR] Failed to get or create machine:', error);
+      throw new Error(`Failed to get or create machine: ${getSafeErrorMessage(error)}`);
     }
-
-    const raw = response.data.machine;
-    logger.debug(`[API] Machine ${opts.machineId} registered/updated with server`);
-
-    // Return decrypted machine like we do for sessions
-    const machine: Machine = {
-      id: raw.id,
-      encryptionKey: encryptionKey,
-      encryptionVariant: encryptionVariant,
-      metadata: raw.metadata ? decrypt(encryptionKey, encryptionVariant, decodeBase64(raw.metadata)) : null,
-      metadataVersion: raw.metadataVersion || 0,
-      daemonState: raw.daemonState ? decrypt(encryptionKey, encryptionVariant, decodeBase64(raw.daemonState)) : null,
-      daemonStateVersion: raw.daemonStateVersion || 0,
-    };
-    return machine;
   }
 
   sessionSyncClient(session: Session): ApiSessionClient {
@@ -198,8 +204,8 @@ export class ApiClient {
 
       logger.debug(`[API] Vendor token for ${vendor} registered successfully`);
     } catch (error) {
-      logger.debug(`[API] [ERROR] Failed to register vendor token:`, error);
-      throw new Error(`Failed to register vendor token: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      logger.debug('[API] [ERROR] Failed to register vendor token:', error);
+      throw new Error(`Failed to register vendor token: ${getSafeErrorMessage(error)}`);
     }
   }
 }

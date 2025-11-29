@@ -3,6 +3,10 @@ import { MessageQueue2 } from "@/utils/MessageQueue2";
 import { EnhancedMode } from "./loop";
 import { logger } from "@/ui/logger";
 
+// Keep-alive timing configuration (prevents thundering herd on reconnection)
+const SESSION_KEEP_ALIVE_BASE_MS = 2000; // 2 seconds base interval
+const SESSION_KEEP_ALIVE_JITTER_MAX_MS = 500; // 0-500ms random jitter
+
 export class Session {
     readonly path: string;
     readonly logPath: string;
@@ -14,6 +18,8 @@ export class Session {
     readonly mcpServers: Record<string, any>;
     readonly allowedTools?: string[];
     readonly _onModeChange: (mode: 'local' | 'remote') => void;
+
+    private keepAliveInterval?: ReturnType<typeof setInterval>;
 
     sessionId: string | null;
     mode: 'local' | 'remote' = 'local';
@@ -44,11 +50,25 @@ export class Session {
         this.allowedTools = opts.allowedTools;
         this._onModeChange = opts.onModeChange;
 
-        // Start keep alive
+        // Start keep alive with jitter to prevent thundering herd
         this.client.keepAlive(this.thinking, this.mode);
-        setInterval(() => {
+        const jitter = Math.random() * SESSION_KEEP_ALIVE_JITTER_MAX_MS;
+        const interval = SESSION_KEEP_ALIVE_BASE_MS + jitter;
+        this.keepAliveInterval = setInterval(() => {
             this.client.keepAlive(this.thinking, this.mode);
-        }, 2000);
+        }, interval);
+    }
+
+    /**
+     * Cleanup resources - MUST be called when session ends
+     * Clears the keep-alive interval to prevent memory leaks
+     */
+    destroy(): void {
+        if (this.keepAliveInterval) {
+            clearInterval(this.keepAliveInterval);
+            this.keepAliveInterval = undefined;
+            logger.debug('[Session] Keep-alive interval cleared');
+        }
     }
 
     onThinkingChange = (thinking: boolean) => {

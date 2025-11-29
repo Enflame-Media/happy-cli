@@ -3,6 +3,7 @@
  * Provides endpoints for listing sessions, stopping sessions, and daemon shutdown
  */
 
+import { timingSafeEqual } from 'crypto';
 import fastify, { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -16,17 +17,42 @@ export function startDaemonControlServer({
   stopSession,
   spawnSession,
   requestShutdown,
-  onHappySessionWebhook
+  onHappySessionWebhook,
+  authToken
 }: {
   getChildren: () => TrackedSession[];
   stopSession: (sessionId: string) => boolean;
   spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
   requestShutdown: () => void;
   onHappySessionWebhook: (sessionId: string, metadata: Metadata) => void;
+  authToken: string;
 }): Promise<{ port: number; stop: () => Promise<void> }> {
   return new Promise((resolve) => {
     const app = fastify({
       logger: false // We use our own logger
+    });
+
+    // Authentication middleware - all requests require valid token
+    app.addHook('preHandler', async (request, reply) => {
+      const providedToken = request.headers['x-daemon-auth'];
+
+      // Handle missing or invalid token types (headers can be string | string[] | undefined)
+      if (!providedToken || Array.isArray(providedToken)) {
+        logger.debug('[CONTROL SERVER] Unauthorized request rejected - missing or invalid token');
+        reply.code(403).send({ error: 'Unauthorized' });
+        return;
+      }
+
+      // Use constant-time comparison to prevent timing attacks
+      const providedBuffer = Buffer.from(providedToken, 'utf8');
+      const authBuffer = Buffer.from(authToken, 'utf8');
+
+      if (providedBuffer.length !== authBuffer.length ||
+          !timingSafeEqual(providedBuffer, authBuffer)) {
+        logger.debug('[CONTROL SERVER] Unauthorized request rejected');
+        reply.code(403).send({ error: 'Unauthorized' });
+        return;
+      }
     });
 
     // Set up Zod type provider

@@ -8,6 +8,7 @@ import { claudeCheckSession } from "./utils/claudeCheckSession";
 import { getProjectPath } from "./utils/path";
 import { projectPath } from "@/projectPath";
 import { systemPrompt } from "./utils/systemPrompt";
+import { isValidSessionId } from "./utils/sessionValidation";
 
 
 // Get Claude CLI path from project root
@@ -36,6 +37,13 @@ export async function claudeLocal(opts: {
         if (typeof filename === 'string' && filename.toLowerCase().endsWith('.jsonl')) {
             logger.debug('change', event, filename);
             const sessionId = filename.replace('.jsonl', '');
+
+            // SECURITY: Validate session ID format to prevent path traversal attacks
+            if (!isValidSessionId(sessionId)) {
+                logger.debug(`[ClaudeLocal] Invalid session ID format rejected from filesystem: ${sessionId.substring(0, 50)}`);
+                return;
+            }
+
             if (detectedIdsFileSystem.has(sessionId)) {
                 return;
             }
@@ -112,6 +120,35 @@ export async function claudeLocal(opts: {
                 signal: opts.abort,
                 cwd: opts.path,
                 env,
+            });
+
+            // Add timeout to escalate to SIGKILL if child ignores SIGTERM
+            // This prevents zombie processes when the child has a SIGTERM handler that doesn't exit
+            let killTimeout: NodeJS.Timeout | undefined;
+            const setKillTimeout = () => {
+                killTimeout = setTimeout(() => {
+                    // Check if process is still alive (exitCode/signalCode are null until process exits)
+                    if (child.exitCode === null && child.signalCode === null) {
+                        logger.debug('[ClaudeLocal] Child did not respond to SIGTERM, sending SIGKILL');
+                        child.kill('SIGKILL');
+                    }
+                }, 5000); // 5 second grace period before SIGKILL
+            };
+
+            // In Node.js, addEventListener doesn't fire for already-aborted signals
+            // so we need to check and set up the timeout immediately in that case
+            if (opts.abort.aborted) {
+                setKillTimeout();
+            } else {
+                opts.abort.addEventListener('abort', setKillTimeout);
+            }
+
+            // Clear kill timeout when child exits (whether via SIGTERM or otherwise)
+            child.on('exit', () => {
+                if (killTimeout) {
+                    clearTimeout(killTimeout);
+                    killTimeout = undefined;
+                }
             });
 
             // Listen to the custom fd (fd 3) line by line

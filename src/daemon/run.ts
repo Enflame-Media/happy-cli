@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import fs from 'fs/promises';
 import os from 'os';
 import * as tmp from 'tmp';
@@ -13,13 +14,15 @@ import { startCaffeinate, stopCaffeinate } from '@/utils/caffeinate';
 import packageJson from '../../package.json';
 import { getEnvironmentInfo } from '@/ui/doctor';
 import { spawnHappyCLI } from '@/utils/spawnHappyCLI';
-import { writeDaemonState, DaemonLocallyPersistedState, readDaemonState, acquireDaemonLock, releaseDaemonLock } from '@/persistence';
+import { writeDaemonState, DaemonLocallyPersistedState, readDaemonState, acquireDaemonLock } from '@/persistence';
+import { withRetry } from '@/utils/retry';
 
 import { cleanupDaemonState, isDaemonRunningCurrentlyInstalledHappyVersion, stopDaemon } from './controlClient';
 import { startDaemonControlServer } from './controlServer';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { projectPath } from '@/projectPath';
+import { validateHeartbeatInterval } from '@/utils/validators';
 
 // Prepare initial metadata
 export const initialMachineMetadata: MachineMetadata = {
@@ -113,6 +116,7 @@ export async function startDaemon(): Promise<void> {
   const daemonLockHandle = await acquireDaemonLock(5, 200);
   if (!daemonLockHandle) {
     logger.debug('[DAEMON RUN] Daemon lock file already held, another daemon is running');
+    console.log('Another daemon instance is already running (lock file held)');
     process.exit(0);
   }
 
@@ -205,7 +209,7 @@ export async function startDaemon(): Promise<void> {
         }
 
         try {
-          await fs.mkdir(directory, { recursive: true });
+          await withRetry(() => fs.mkdir(directory, { recursive: true }));
           logger.debug(`[DAEMON RUN] Successfully created directory: ${directory}`);
           directoryCreated = true;
         } catch (mkdirError: any) {
@@ -237,13 +241,14 @@ export async function startDaemon(): Promise<void> {
         // Resolve authentication token if provided
         let extraEnv: Record<string, string> = {};
         if (options.token) {
+          const token = options.token; // Assign to local variable for readability
           if (options.agent === 'codex') {
 
             // Create a temporary directory for Codex
             const codexHomeDir = tmp.dirSync();
 
             // Write the token to the temporary directory
-            fs.writeFile(join(codexHomeDir.name, 'auth.json'), options.token);
+            await withRetry(() => fs.writeFile(join(codexHomeDir.name, 'auth.json'), token));
 
             // Set the environment variable for Codex
             extraEnv = {
@@ -251,7 +256,7 @@ export async function startDaemon(): Promise<void> {
             };
           } else { // Assuming claude
             extraEnv = {
-              CLAUDE_CODE_OAUTH_TOKEN: options.token
+              CLAUDE_CODE_OAUTH_TOKEN: token
             };
           }
         }
@@ -397,13 +402,19 @@ export async function startDaemon(): Promise<void> {
       pidToTrackedSession.delete(pid);
     };
 
+    // Generate and write auth token for control server authentication
+    const daemonAuthToken = randomBytes(32).toString('hex');
+    await fs.writeFile(configuration.daemonAuthTokenFile, daemonAuthToken, { mode: 0o600 });
+    logger.debug('[DAEMON RUN] Auth token generated and written to file with restricted permissions');
+
     // Start control server
     const { port: controlPort, stop: stopControlServer } = await startDaemonControlServer({
       getChildren: getCurrentChildren,
       stopSession,
       spawnSession,
       requestShutdown: () => requestShutdown('happy-cli'),
-      onHappySessionWebhook
+      onHappySessionWebhook,
+      authToken: daemonAuthToken
     });
 
     // Write initial daemon state (no lock needed for state file)
@@ -454,7 +465,11 @@ export async function startDaemon(): Promise<void> {
     // 2. Check if daemon needs update
     // 3. If outdated, restart with latest version
     // 4. Write heartbeat
-    const heartbeatIntervalMs = parseInt(process.env.HAPPY_DAEMON_HEARTBEAT_INTERVAL || '60000');
+    const heartbeatIntervalMs = validateHeartbeatInterval(
+      process.env.HAPPY_DAEMON_HEARTBEAT_INTERVAL,
+      'HAPPY_DAEMON_HEARTBEAT_INTERVAL',
+      { defaultValue: 60_000, min: 1000, max: 3600_000 }
+    );
     let heartbeatRunning = false
     const restartOnStaleVersionAndHeartbeat = setInterval(async () => {
       if (heartbeatRunning) {
@@ -563,9 +578,21 @@ export async function startDaemon(): Promise<void> {
       await stopControlServer();
       await cleanupDaemonState();
       await stopCaffeinate();
-      await releaseDaemonLock(daemonLockHandle);
 
-      logger.debug('[DAEMON RUN] Cleanup completed, exiting process');
+      // Remove auth token file
+      try {
+        await fs.unlink(configuration.daemonAuthTokenFile);
+        logger.debug('[DAEMON RUN] Auth token file removed');
+      } catch {
+        // Ignore if file doesn't exist
+      }
+
+      // Don't release lock manually - let OS clean it up on process.exit()
+      // This prevents a race window where another daemon could acquire the lock
+      // while this process is still running between releaseDaemonLock() and process.exit()
+      // The lock file will remain with our PID; new daemons will detect the stale lock
+      // (dead PID) and clean it up atomically before acquiring their own lock.
+      logger.debug('[DAEMON RUN] Cleanup completed, exiting process (lock released by OS on exit)');
       process.exit(0);
     };
 

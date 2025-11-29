@@ -27,6 +27,11 @@ import { notifyDaemonSessionStarted } from "@/daemon/controlClient";
 import { registerKillSessionHandler } from "@/claude/registerKillSessionHandler";
 import { delay } from "@/utils/time";
 import { stopCaffeinate } from "@/utils/caffeinate";
+import { isValidSessionId } from "@/claude/utils/sessionValidation";
+
+// Keep-alive timing configuration (prevents thundering herd on reconnection)
+const CODEX_KEEP_ALIVE_BASE_MS = 2000; // 2 seconds base interval
+const CODEX_KEEP_ALIVE_JITTER_MAX_MS = 500; // 0-500ms random jitter
 
 type ReadyEventOptions = {
     pending: unknown;
@@ -127,7 +132,7 @@ export async function runCodex(opts: {
     try {
         logger.debug(`[START] Reporting session ${response.id} to daemon`);
         const result = await notifyDaemonSessionStarted(response.id, metadata);
-        if (result.error) {
+        if (!result.success) {
             logger.debug(`[START] Failed to report to daemon (may not be running):`, result.error);
         } else {
             logger.debug(`[START] Reported session ${response.id} to daemon`);
@@ -179,10 +184,12 @@ export async function runCodex(opts: {
     });
     let thinking = false;
     session.keepAlive(thinking, 'remote');
-    // Periodic keep-alive; store handle so we can clear on exit
+    // Periodic keep-alive with jitter to prevent thundering herd; store handle so we can clear on exit
+    const keepAliveJitter = Math.random() * CODEX_KEEP_ALIVE_JITTER_MAX_MS;
+    const keepAliveIntervalMs = CODEX_KEEP_ALIVE_BASE_MS + keepAliveJitter;
     const keepAliveInterval = setInterval(() => {
         session.keepAlive(thinking, 'remote');
-    }, 2000);
+    }, keepAliveIntervalMs);
 
     const sendReady = () => {
         session.sendSessionEvent({ type: 'ready' });
@@ -296,7 +303,7 @@ export async function runCodex(opts: {
     };
 
     // Register abort handler
-    session.rpcHandlerManager.registerHandler('abort', handleAbort);
+    session.rpcHandlerManager.registerHandler('abort', async (params, signal) => handleAbort());
 
     registerKillSessionHandler(session.rpcHandlerManager, handleKillSession);
 
@@ -342,6 +349,13 @@ export async function runCodex(opts: {
     // Helper: find Codex session transcript for a given sessionId
     function findCodexResumeFile(sessionId: string | null): string | null {
         if (!sessionId) return null;
+
+        // SECURITY: Validate session ID format to prevent path traversal
+        if (!isValidSessionId(sessionId)) {
+            logger.debug(`[Codex] Invalid session ID format rejected: ${sessionId.substring(0, 50)}`);
+            return null;
+        }
+
         try {
             const codexHomeDir = process.env.CODEX_HOME || join(os.homedir(), '.codex');
             const rootDir = join(codexHomeDir, 'sessions');

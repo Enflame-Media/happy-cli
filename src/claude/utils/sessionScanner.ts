@@ -1,10 +1,11 @@
 import { InvalidateSync } from "@/utils/sync";
 import { RawJSONLines, RawJSONLinesSchema } from "../types";
-import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import { logger } from "@/ui/logger";
 import { startFileWatcher } from "@/modules/watcher/startFileWatcher";
 import { getProjectPath } from "./path";
+import { withRetry } from "@/utils/retry";
+import { getValidatedSessionPath, isValidSessionId, InvalidSessionIdError } from "./sessionValidation";
 
 export async function createSessionScanner(opts: {
     sessionId: string | null,
@@ -66,7 +67,17 @@ export async function createSessionScanner(opts: {
         // Update watchers
         for (let p of sessions) {
             if (!watchers.has(p)) {
-                watchers.set(p, startFileWatcher(join(projectDir, `${p}.jsonl`), () => { sync.invalidate(); }));
+                // Validate session ID before creating watcher path
+                try {
+                    const watchPath = getValidatedSessionPath(projectDir, p);
+                    watchers.set(p, startFileWatcher(watchPath, () => { sync.invalidate(); }));
+                } catch (error) {
+                    if (error instanceof InvalidSessionIdError) {
+                        logger.debug(`[SESSION_SCANNER] Invalid session ID rejected for watcher: ${error.message}`);
+                        continue;
+                    }
+                    throw error;
+                }
             }
         }
     });
@@ -87,6 +98,11 @@ export async function createSessionScanner(opts: {
             sync.stop();
         },
         onNewSession: (sessionId: string) => {
+            // Validate session ID format to prevent path traversal attacks
+            if (!isValidSessionId(sessionId)) {
+                logger.debug(`[SESSION_SCANNER] Invalid session ID format rejected: ${sessionId.substring(0, 50)}`);
+                return;
+            }
             if (currentSessionId === sessionId) {
                 logger.debug(`[SESSION_SCANNER] New session: ${sessionId} is the same as the current session, skipping`);
                 return;
@@ -131,11 +147,22 @@ function messageKey(message: RawJSONLines): string {
 }
 
 async function readSessionLog(projectDir: string, sessionId: string): Promise<RawJSONLines[]> {
-    const expectedSessionFile = join(projectDir, `${sessionId}.jsonl`);
+    // Validate session ID to prevent path traversal attacks
+    let expectedSessionFile: string;
+    try {
+        expectedSessionFile = getValidatedSessionPath(projectDir, sessionId);
+    } catch (error) {
+        if (error instanceof InvalidSessionIdError) {
+            logger.debug(`[SESSION_SCANNER] Invalid session ID rejected: ${error.message}`);
+            return [];
+        }
+        throw error;
+    }
+
     logger.debug(`[SESSION_SCANNER] Reading session file: ${expectedSessionFile}`);
     let file: string;
     try {
-        file = await readFile(expectedSessionFile, 'utf-8');
+        file = await withRetry(() => readFile(expectedSessionFile, 'utf-8'));
     } catch (error) {
         logger.debug(`[SESSION_SCANNER] Session file not found: ${expectedSessionFile}`);
         return [];

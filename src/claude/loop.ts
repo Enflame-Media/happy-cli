@@ -65,11 +65,16 @@ export async function loop(opts: LoopOptions) {
         if (mode === 'local') {
             let reason = await claudeLocalLauncher(session);
             if (reason === 'exit') { // Normal exit - Exit loop
+                session.destroy();
                 return;
             }
 
             // Non "exit" reason means we need to switch to remote mode
             mode = 'remote';
+
+            // Wait for cleanup to complete before notifying mode change
+            await new Promise(resolve => setTimeout(resolve, 50));
+
             if (opts.onModeChange) {
                 opts.onModeChange(mode);
             }
@@ -80,11 +85,16 @@ export async function loop(opts: LoopOptions) {
         if (mode === 'remote') {
             let reason = await claudeRemoteLauncher(session);
             if (reason === 'exit') { // Normal exit - Exit loop
+                session.destroy();
                 return;
             }
 
             // Non "exit" reason means we need to switch to local mode
             mode = 'local';
+
+            // Wait for cleanup to complete before notifying mode change
+            await new Promise(resolve => setTimeout(resolve, 50));
+
             if (opts.onModeChange) {
                 opts.onModeChange(mode);
             }

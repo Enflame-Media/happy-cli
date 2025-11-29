@@ -107,8 +107,10 @@ describe.skipIf(!await isServerHealthy())('Daemon Integration Tests', { timeout:
   });
 
   it('should list sessions (initially empty)', async () => {
-    const sessions = await listDaemonSessions();
-    expect(sessions).toEqual([]);
+    const result = await listDaemonSessions();
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error(result.error);
+    expect(result.data.children).toEqual([]);
   });
 
   it('should track session-started webhook from terminal session', async () => {
@@ -125,13 +127,16 @@ describe.skipIf(!await isServerHealthy())('Daemon Integration Tests', { timeout:
       machineId: 'test-machine-123'
     };
 
-    await notifyDaemonSessionStarted('test-session-123', mockMetadata);
+    const notifyResult = await notifyDaemonSessionStarted('test-session-123', mockMetadata);
+    expect(notifyResult.success).toBe(true);
 
     // Verify session is tracked
-    const sessions = await listDaemonSessions();
-    expect(sessions).toHaveLength(1);
-    
-    const tracked = sessions[0];
+    const result = await listDaemonSessions();
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error(result.error);
+    expect(result.data.children).toHaveLength(1);
+
+    const tracked = result.data.children[0];
     expect(tracked.startedBy).toBe('happy directly - likely by user from terminal');
     expect(tracked.happySessionId).toBe('test-session-123');
     expect(tracked.pid).toBe(99999);
@@ -140,21 +145,25 @@ describe.skipIf(!await isServerHealthy())('Daemon Integration Tests', { timeout:
   it('should spawn & stop a session via HTTP (not testing RPC route, but similar enough)', async () => {
     const response = await spawnDaemonSession('/tmp', 'spawned-test-456');
 
-    expect(response).toHaveProperty('success', true);
-    expect(response).toHaveProperty('sessionId');
+    expect(response.success).toBe(true);
+    if (!response.success) throw new Error(response.error);
+    expect(response.data.success).toBe(true);
+    expect(response.data.sessionId).toBeDefined();
 
     // Verify session is tracked
-    const sessions = await listDaemonSessions();
-    const spawnedSession = sessions.find(
-      (s: any) => s.happySessionId === response.sessionId
+    const listResult = await listDaemonSessions();
+    expect(listResult.success).toBe(true);
+    if (!listResult.success) throw new Error(listResult.error);
+    const spawnedSession = listResult.data.children.find(
+      (s) => s.happySessionId === response.data.sessionId
     );
-    
+
     expect(spawnedSession).toBeDefined();
-    expect(spawnedSession.startedBy).toBe('daemon');
-    
+    expect(spawnedSession!.startedBy).toBe('daemon');
+
     // Clean up - stop the spawned session
-    expect(spawnedSession.happySessionId).toBeDefined();
-    await stopDaemonSession(spawnedSession.happySessionId);
+    expect(spawnedSession!.happySessionId).toBeDefined();
+    await stopDaemonSession(spawnedSession!.happySessionId);
   });
 
   it('stress test: spawn / stop', { timeout: 60_000 }, async () => {
@@ -166,22 +175,31 @@ describe.skipIf(!await isServerHealthy())('Daemon Integration Tests', { timeout:
 
     // Wait for all sessions to be spawned
     const results = await Promise.all(promises);
-    const sessionIds = results.map(r => r.sessionId);
+    const sessionIds = results.map(r => {
+      expect(r.success).toBe(true);
+      if (!r.success) throw new Error(r.error);
+      return r.data.sessionId!;
+    });
 
-    const sessions = await listDaemonSessions();
-    expect(sessions).toHaveLength(sessionCount);
+    const listResult = await listDaemonSessions();
+    expect(listResult.success).toBe(true);
+    if (!listResult.success) throw new Error(listResult.error);
+    expect(listResult.data.children).toHaveLength(sessionCount);
 
     // Stop all sessions
     const stopResults = await Promise.all(sessionIds.map(sessionId => stopDaemonSession(sessionId)));
-    expect(stopResults.every(r => r), 'Not all sessions reported stopped').toBe(true);
+    expect(stopResults.every(r => r.success && r.data.success), 'Not all sessions reported stopped').toBe(true);
 
     // Verify all sessions are stopped
-    const emptySessions = await listDaemonSessions();
-    expect(emptySessions).toHaveLength(0);
+    const emptyListResult = await listDaemonSessions();
+    expect(emptyListResult.success).toBe(true);
+    if (!emptyListResult.success) throw new Error(emptyListResult.error);
+    expect(emptyListResult.data.children).toHaveLength(0);
   });
 
-  it('should handle daemon stop request gracefully', async () => {    
-    await stopDaemonHttp();
+  it('should handle daemon stop request gracefully', async () => {
+    const result = await stopDaemonHttp();
+    expect(result.success).toBe(true);
 
     // Verify metadata file is cleaned up
     await waitFor(async () => !existsSync(configuration.daemonStateFile), 1000);
@@ -205,33 +223,37 @@ describe.skipIf(!await isServerHealthy())('Daemon Integration Tests', { timeout:
 
     // Spawn a daemon session
     const spawnResponse = await spawnDaemonSession('/tmp', 'daemon-session-bbb');
+    expect(spawnResponse.success).toBe(true);
+    if (!spawnResponse.success) throw new Error(spawnResponse.error);
 
     // List all sessions
-    const sessions = await listDaemonSessions();
-    expect(sessions).toHaveLength(2);
+    const listResult = await listDaemonSessions();
+    expect(listResult.success).toBe(true);
+    if (!listResult.success) throw new Error(listResult.error);
+    expect(listResult.data.children).toHaveLength(2);
 
     // Verify we have one of each type
-    const terminalSession = sessions.find(
-      (s: any) => s.pid === terminalHappyProcess.pid
+    const terminalSession = listResult.data.children.find(
+      (s) => s.pid === terminalHappyProcess.pid
     );
-    const daemonSession = sessions.find(
-      (s: any) => s.happySessionId === spawnResponse.sessionId
+    const daemonSession = listResult.data.children.find(
+      (s) => s.happySessionId === spawnResponse.data.sessionId
     );
 
     expect(terminalSession).toBeDefined();
-    expect(terminalSession.startedBy).toBe('happy directly - likely by user from terminal');
-    
+    expect(terminalSession!.startedBy).toBe('happy directly - likely by user from terminal');
+
     expect(daemonSession).toBeDefined();
-    expect(daemonSession.startedBy).toBe('daemon');
+    expect(daemonSession!.startedBy).toBe('daemon');
 
     // Clean up both sessions
     await stopDaemonSession('terminal-session-aaa');
-    await stopDaemonSession(daemonSession.happySessionId);
-    
+    await stopDaemonSession(daemonSession!.happySessionId);
+
     // Also kill the terminal process directly to be sure
     try {
       terminalHappyProcess.kill('SIGTERM');
-    } catch (e) {
+    } catch {
       // Process might already be dead
     }
   });
@@ -239,14 +261,18 @@ describe.skipIf(!await isServerHealthy())('Daemon Integration Tests', { timeout:
   it('should update session metadata when webhook is called', async () => {
     // Spawn a session
     const spawnResponse = await spawnDaemonSession('/tmp');
+    expect(spawnResponse.success).toBe(true);
+    if (!spawnResponse.success) throw new Error(spawnResponse.error);
 
     // Verify webhook was processed (session ID updated)
-    const sessions = await listDaemonSessions();
-    const session = sessions.find((s: any) => s.happySessionId === spawnResponse.sessionId);
+    const listResult = await listDaemonSessions();
+    expect(listResult.success).toBe(true);
+    if (!listResult.success) throw new Error(listResult.error);
+    const session = listResult.data.children.find((s) => s.happySessionId === spawnResponse.data.sessionId);
     expect(session).toBeDefined();
 
     // Clean up
-    await stopDaemonSession(spawnResponse.sessionId);
+    await stopDaemonSession(spawnResponse.data.sessionId!);
   });
 
   it('should not allow starting a second daemon', async () => {
@@ -285,23 +311,30 @@ describe.skipIf(!await isServerHealthy())('Daemon Integration Tests', { timeout:
     }
 
     const results = await Promise.all(promises);
-    
+
     // All should succeed
     results.forEach(res => {
       expect(res.success).toBe(true);
-      expect(res.sessionId).toBeDefined();
+      if (!res.success) throw new Error(res.error);
+      expect(res.data.success).toBe(true);
+      expect(res.data.sessionId).toBeDefined();
     });
 
     // Collect session IDs for tracking
-    const spawnedSessionIds = results.map(r => r.sessionId);
+    const spawnedSessionIds = results.map(r => {
+      if (!r.success) throw new Error(r.error);
+      return r.data.sessionId!;
+    });
 
     // Give sessions time to report via webhook
     await new Promise(resolve => setTimeout(resolve, 1000));
 
     // List should show all sessions
-    const sessions = await listDaemonSessions();
-    const daemonSessions = sessions.filter(
-      (s: any) => s.startedBy === 'daemon' && spawnedSessionIds.includes(s.happySessionId)
+    const listResult = await listDaemonSessions();
+    expect(listResult.success).toBe(true);
+    if (!listResult.success) throw new Error(listResult.error);
+    const daemonSessions = listResult.data.children.filter(
+      (s) => s.startedBy === 'daemon' && spawnedSessionIds.includes(s.happySessionId)
     );
     expect(daemonSessions.length).toBeGreaterThanOrEqual(3);
 

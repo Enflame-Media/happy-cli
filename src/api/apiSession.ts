@@ -92,7 +92,9 @@ export class ApiSessionClient extends EventEmitter {
         })
 
         // Server events
-        this.socket.on('update', (data: Update) => {
+        // Note: async callback is intentional - Socket.IO ignores the returned Promise
+        // but we need async to properly serialize state updates with locks
+        this.socket.on('update', async (data: Update) => {
             try {
                 logger.debugLargeJson('[SOCKET] [UPDATE] Received update:', data);
 
@@ -120,13 +122,25 @@ export class ApiSessionClient extends EventEmitter {
                         this.emit('message', body);
                     }
                 } else if (data.body.t === 'update-session') {
+                    // Acquire locks to prevent race conditions with client-initiated updates
+                    // Use double-check pattern: check version before AND inside lock
                     if (data.body.metadata && data.body.metadata.version > this.metadataVersion) {
-                        this.metadata = decrypt(this.encryptionKey, this.encryptionVariant,decodeBase64(data.body.metadata.value));
-                        this.metadataVersion = data.body.metadata.version;
+                        await this.metadataLock.inLock(async () => {
+                            // Re-check version inside lock to avoid stale updates
+                            if (data.body.t === 'update-session' && data.body.metadata && data.body.metadata.version > this.metadataVersion) {
+                                this.metadata = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(data.body.metadata.value));
+                                this.metadataVersion = data.body.metadata.version;
+                            }
+                        });
                     }
                     if (data.body.agentState && data.body.agentState.version > this.agentStateVersion) {
-                        this.agentState = data.body.agentState.value ? decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(data.body.agentState.value)) : null;
-                        this.agentStateVersion = data.body.agentState.version;
+                        await this.agentStateLock.inLock(async () => {
+                            // Re-check version inside lock to avoid stale updates
+                            if (data.body.t === 'update-session' && data.body.agentState && data.body.agentState.version > this.agentStateVersion) {
+                                this.agentState = data.body.agentState.value ? decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(data.body.agentState.value)) : null;
+                                this.agentStateVersion = data.body.agentState.version;
+                            }
+                        });
                     }
                 } else if (data.body.t === 'update-machine') {
                     // Session clients shouldn't receive machine updates - log warning
@@ -319,8 +333,8 @@ export class ApiSessionClient extends EventEmitter {
      * Update session metadata
      * @param handler - Handler function that returns the updated metadata
      */
-    updateMetadata(handler: (metadata: Metadata) => Metadata) {
-        this.metadataLock.inLock(async () => {
+    updateMetadata(handler: (metadata: Metadata) => Metadata): Promise<void> {
+        return this.metadataLock.inLock(async () => {
             await backoff(async () => {
                 let updated = handler(this.metadata!); // Weird state if metadata is null - should never happen but here we are
                 const answer = await this.socket.emitWithAck('update-metadata', { sid: this.sessionId, expectedVersion: this.metadataVersion, metadata: encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, updated)) });
@@ -344,9 +358,9 @@ export class ApiSessionClient extends EventEmitter {
      * Update session agent state
      * @param handler - Handler function that returns the updated agent state
      */
-    updateAgentState(handler: (metadata: AgentState) => AgentState) {
+    updateAgentState(handler: (metadata: AgentState) => AgentState): Promise<void> {
         logger.debugLargeJson('Updating agent state', this.agentState);
-        this.agentStateLock.inLock(async () => {
+        return this.agentStateLock.inLock(async () => {
             await backoff(async () => {
                 let updated = handler(this.agentState || {});
                 const answer = await this.socket.emitWithAck('update-state', { sid: this.sessionId, expectedVersion: this.agentStateVersion, agentState: updated ? encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, updated)) : null });
@@ -387,6 +401,21 @@ export class ApiSessionClient extends EventEmitter {
 
     async close() {
         logger.debug('[API] socket.close() called');
+
+        // Cancel all pending RPC requests before closing
+        this.rpcHandlerManager.cancelAllPendingRequests();
+
+        // Remove all socket event listeners before closing to prevent memory leaks
+        this.socket.removeAllListeners();
+
+        // Close socket
         this.socket.close();
+
+        // Clean up EventEmitter listeners (inherited from EventEmitter)
+        this.removeAllListeners();
+
+        // Clear pending messages
+        this.pendingMessages = [];
+        this.pendingMessageCallback = null;
     }
 }

@@ -7,6 +7,7 @@ import { join } from 'path';
 import { run as runRipgrep } from '@/modules/ripgrep/index';
 import { run as runDifftastic } from '@/modules/difftastic/index';
 import { RpcHandlerManager } from '../../api/rpc/RpcHandlerManager';
+import { withRetry } from '@/utils/retry';
 
 const execAsync = promisify(exec);
 
@@ -134,7 +135,7 @@ export type SpawnSessionResult =
 export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager) {
 
     // Shell command handler - executes commands in the default shell
-    rpcHandlerManager.registerHandler<BashRequest, BashResponse>('bash', async (data) => {
+    rpcHandlerManager.registerHandler<BashRequest, BashResponse>('bash', async (data, signal) => {
         logger.debug('Shell command request:', data.command);
 
         try {
@@ -184,11 +185,11 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager) {
     });
 
     // Read file handler - returns base64 encoded content
-    rpcHandlerManager.registerHandler<ReadFileRequest, ReadFileResponse>('readFile', async (data) => {
+    rpcHandlerManager.registerHandler<ReadFileRequest, ReadFileResponse>('readFile', async (data, signal) => {
         logger.debug('Read file request:', data.path);
 
         try {
-            const buffer = await readFile(data.path);
+            const buffer = await withRetry(() => readFile(data.path));
             const content = buffer.toString('base64');
             return { success: true, content };
         } catch (error) {
@@ -198,14 +199,14 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager) {
     });
 
     // Write file handler - with hash verification
-    rpcHandlerManager.registerHandler<WriteFileRequest, WriteFileResponse>('writeFile', async (data) => {
+    rpcHandlerManager.registerHandler<WriteFileRequest, WriteFileResponse>('writeFile', async (data, signal) => {
         logger.debug('Write file request:', data.path);
 
         try {
             // If expectedHash is provided (not null), verify existing file
             if (data.expectedHash !== null && data.expectedHash !== undefined) {
                 try {
-                    const existingBuffer = await readFile(data.path);
+                    const existingBuffer = await withRetry(() => readFile(data.path));
                     const existingHash = createHash('sha256').update(existingBuffer).digest('hex');
 
                     if (existingHash !== data.expectedHash) {
@@ -245,7 +246,7 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager) {
 
             // Write the file
             const buffer = Buffer.from(data.content, 'base64');
-            await writeFile(data.path, buffer);
+            await withRetry(() => writeFile(data.path, buffer));
 
             // Calculate and return hash of written file
             const hash = createHash('sha256').update(buffer).digest('hex');
@@ -258,7 +259,7 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager) {
     });
 
     // List directory handler
-    rpcHandlerManager.registerHandler<ListDirectoryRequest, ListDirectoryResponse>('listDirectory', async (data) => {
+    rpcHandlerManager.registerHandler<ListDirectoryRequest, ListDirectoryResponse>('listDirectory', async (data, signal) => {
         logger.debug('List directory request:', data.path);
 
         try {
@@ -310,7 +311,7 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager) {
     });
 
     // Get directory tree handler - recursive with depth control
-    rpcHandlerManager.registerHandler<GetDirectoryTreeRequest, GetDirectoryTreeResponse>('getDirectoryTree', async (data) => {
+    rpcHandlerManager.registerHandler<GetDirectoryTreeRequest, GetDirectoryTreeResponse>('getDirectoryTree', async (data, signal) => {
         logger.debug('Get directory tree request:', data.path, 'maxDepth:', data.maxDepth);
 
         // Helper function to build tree recursively
@@ -391,7 +392,7 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager) {
     });
 
     // Ripgrep handler - raw interface to ripgrep
-    rpcHandlerManager.registerHandler<RipgrepRequest, RipgrepResponse>('ripgrep', async (data) => {
+    rpcHandlerManager.registerHandler<RipgrepRequest, RipgrepResponse>('ripgrep', async (data, signal) => {
         logger.debug('Ripgrep request with args:', data.args, 'cwd:', data.cwd);
 
         try {
@@ -412,7 +413,7 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager) {
     });
 
     // Difftastic handler - raw interface to difftastic
-    rpcHandlerManager.registerHandler<DifftasticRequest, DifftasticResponse>('difftastic', async (data) => {
+    rpcHandlerManager.registerHandler<DifftasticRequest, DifftasticResponse>('difftastic', async (data, signal) => {
         logger.debug('Difftastic request with args:', data.args, 'cwd:', data.cwd);
 
         try {

@@ -38,7 +38,7 @@ export async function doAuth(): Promise<Credentials | null> {
         });
         console.log(`[AUTH DEBUG] Auth request sent successfully`);
     } catch (error) {
-        console.log(`[AUTH DEBUG] Failed to send auth request:`, error);
+        logger.debug('[AUTH] [ERROR] Failed to send auth request:', error);
         console.log('Failed to create authentication request, please try again later.');
         return null;
     }

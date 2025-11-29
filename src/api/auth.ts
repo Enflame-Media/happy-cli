@@ -1,6 +1,8 @@
 import axios from 'axios';
 import { encodeBase64, encodeBase64Url, authChallenge } from './encryption';
 import { configuration } from '@/configuration';
+import { logger } from '@/ui/logger';
+import { getSafeErrorMessage } from '@/utils/errors';
 
 /**
  * Note: This function is deprecated. Use readPrivateKey/writePrivateKey from persistence module instead.
@@ -18,18 +20,23 @@ export async function getOrCreateSecretKey(): Promise<Uint8Array> {
  */
 export async function authGetToken(secret: Uint8Array): Promise<string> {
   const { challenge, publicKey, signature } = authChallenge(secret);
-  
-  const response = await axios.post(`${configuration.serverUrl}/v1/auth`, {
-    challenge: encodeBase64(challenge),
-    publicKey: encodeBase64(publicKey),
-    signature: encodeBase64(signature)
-  });
 
-  if (!response.data.success || !response.data.token) {
-    throw new Error('Authentication failed');
+  try {
+    const response = await axios.post(`${configuration.serverUrl}/v1/auth`, {
+      challenge: encodeBase64(challenge),
+      publicKey: encodeBase64(publicKey),
+      signature: encodeBase64(signature)
+    });
+
+    if (!response.data.success || !response.data.token) {
+      throw new Error('Authentication failed');
+    }
+
+    return response.data.token;
+  } catch (error) {
+    logger.debug('[AUTH] [ERROR] Authentication request failed:', error);
+    throw new Error(`Authentication failed: ${getSafeErrorMessage(error)}`);
   }
-
-  return response.data.token;
 }
 
 /**

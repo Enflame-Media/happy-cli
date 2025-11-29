@@ -1,13 +1,24 @@
 import { logger } from "@/ui/logger";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { getProjectPath } from "./path";
+import { getValidatedSessionPath, InvalidSessionIdError } from "./sessionValidation";
 
 export function claudeCheckSession(sessionId: string, path: string) {
     const projectDir = getProjectPath(path);
 
-    // Check if session id is in the project dir
-    const sessionFile = join(projectDir, `${sessionId}.jsonl`);
+    // Validate session ID to prevent path traversal attacks
+    let sessionFile: string;
+    try {
+        sessionFile = getValidatedSessionPath(projectDir, sessionId);
+    } catch (error) {
+        if (error instanceof InvalidSessionIdError) {
+            logger.debug(`[claudeCheckSession] Invalid session ID rejected: ${error.message}`);
+            return false;
+        }
+        throw error;
+    }
+
+    // Check if session file exists
     const sessionExists = existsSync(sessionFile);
     if (!sessionExists) {
         logger.debug(`[claudeCheckSession] Path ${sessionFile} does not exist`);

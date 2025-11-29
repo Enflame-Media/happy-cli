@@ -388,7 +388,7 @@ export type AgentState = {
       arguments: any,
       createdAt: number,
       completedAt: number,
-      status: 'canceled' | 'denied' | 'approved',
+      status: 'canceled' | 'denied' | 'approved' | 'timeout',
       reason?: string,
       mode?: PermissionMode,
       decision?: 'approved' | 'approved_for_session' | 'denied' | 'abort',
