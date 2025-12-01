@@ -9,8 +9,7 @@ import type {
     SDKMessage,
     SDKUserMessage,
     SDKAssistantMessage,
-    SDKSystemMessage,
-    SDKResultMessage
+    SDKSystemMessage
 } from '@/claude/sdk'
 import type { RawJSONLines } from '@/claude/types'
 

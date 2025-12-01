@@ -177,7 +177,7 @@ describe('sessionScanner watcher lifecycle', () => {
 
     // Verify watcher is active
     expect(watcherTracking.activeCount()).toBe(1)
-    const watchersBeforeCleanup = watcherTracking.created.length
+    const _watchersBeforeCleanup = watcherTracking.created.length
 
     // Cleanup the scanner
     await scanner.cleanup()

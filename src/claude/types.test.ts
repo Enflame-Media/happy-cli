@@ -12,6 +12,19 @@
 import { describe, it, expect, vi } from 'vitest';
 import { parseJsonWithContext, JsonParseError } from './types';
 
+/** Helper to capture thrown errors for testing - avoids no-conditional-expect lint warnings */
+function getError<T extends Error>(fn: () => unknown): T {
+  try {
+    fn();
+    throw new Error('Expected function to throw but it did not');
+  } catch (e) {
+    if (e instanceof Error && e.message === 'Expected function to throw but it did not') {
+      throw e;
+    }
+    return e as T;
+  }
+}
+
 describe('parseJsonWithContext', () => {
   describe('valid JSON parsing', () => {
     it('should parse valid JSON object', () => {
@@ -69,116 +82,76 @@ describe('parseJsonWithContext', () => {
 
     it('should include inputPreview in error', () => {
       const input = '{"invalid": }';
-      try {
-        parseJsonWithContext(input);
-        expect.fail('Should have thrown');
-      } catch (e) {
-        expect(e).toBeInstanceOf(JsonParseError);
-        expect((e as JsonParseError).inputPreview).toBe(input);
-      }
+      const error = getError<JsonParseError>(() => parseJsonWithContext(input));
+      expect(error).toBeInstanceOf(JsonParseError);
+      expect(error.inputPreview).toBe(input);
     });
 
     it('should include correct inputLength in error', () => {
       const input = 'this is not valid json';
-      try {
-        parseJsonWithContext(input);
-        expect.fail('Should have thrown');
-      } catch (e) {
-        expect(e).toBeInstanceOf(JsonParseError);
-        expect((e as JsonParseError).inputLength).toBe(input.length);
-      }
+      const error = getError<JsonParseError>(() => parseJsonWithContext(input));
+      expect(error).toBeInstanceOf(JsonParseError);
+      expect(error.inputLength).toBe(input.length);
     });
 
     it('should preserve originalError as SyntaxError', () => {
-      try {
-        parseJsonWithContext('{"invalid": }');
-        expect.fail('Should have thrown');
-      } catch (e) {
-        expect(e).toBeInstanceOf(JsonParseError);
-        expect((e as JsonParseError).originalError).toBeInstanceOf(SyntaxError);
-      }
+      const error = getError<JsonParseError>(() => parseJsonWithContext('{"invalid": }'));
+      expect(error).toBeInstanceOf(JsonParseError);
+      expect(error.originalError).toBeInstanceOf(SyntaxError);
     });
   });
 
   describe('input truncation', () => {
     it('should truncate long inputs to default previewLength (200)', () => {
       const longInput = 'x'.repeat(500);
-      try {
-        parseJsonWithContext(longInput);
-        expect.fail('Should have thrown');
-      } catch (e) {
-        expect(e).toBeInstanceOf(JsonParseError);
-        const error = e as JsonParseError;
-        // Preview should be 200 chars + '...' = 203 chars max
-        expect(error.inputPreview.length).toBeLessThanOrEqual(203);
-        expect(error.inputPreview.endsWith('...')).toBe(true);
-      }
+      const error = getError<JsonParseError>(() => parseJsonWithContext(longInput));
+      expect(error).toBeInstanceOf(JsonParseError);
+      // Preview should be 200 chars + '...' = 203 chars max
+      expect(error.inputPreview.length).toBeLessThanOrEqual(203);
+      expect(error.inputPreview.endsWith('...')).toBe(true);
     });
 
     it('should include correct inputLength for truncated inputs', () => {
       const longInput = 'y'.repeat(500);
-      try {
-        parseJsonWithContext(longInput);
-        expect.fail('Should have thrown');
-      } catch (e) {
-        expect(e).toBeInstanceOf(JsonParseError);
-        expect((e as JsonParseError).inputLength).toBe(500);
-      }
+      const error = getError<JsonParseError>(() => parseJsonWithContext(longInput));
+      expect(error).toBeInstanceOf(JsonParseError);
+      expect(error.inputLength).toBe(500);
     });
 
     it('should not truncate inputs shorter than previewLength', () => {
       const shortInput = 'invalid json';
-      try {
-        parseJsonWithContext(shortInput);
-        expect.fail('Should have thrown');
-      } catch (e) {
-        expect(e).toBeInstanceOf(JsonParseError);
-        expect((e as JsonParseError).inputPreview).toBe(shortInput);
-        expect((e as JsonParseError).inputPreview.endsWith('...')).toBe(false);
-      }
+      const error = getError<JsonParseError>(() => parseJsonWithContext(shortInput));
+      expect(error).toBeInstanceOf(JsonParseError);
+      expect(error.inputPreview).toBe(shortInput);
+      expect(error.inputPreview.endsWith('...')).toBe(false);
     });
 
     it('should use custom previewLength option', () => {
       const longInput = 'z'.repeat(100);
-      try {
-        parseJsonWithContext(longInput, { previewLength: 50 });
-        expect.fail('Should have thrown');
-      } catch (e) {
-        expect(e).toBeInstanceOf(JsonParseError);
-        const error = e as JsonParseError;
-        // Preview should be 50 chars + '...' = 53 chars max
-        expect(error.inputPreview.length).toBeLessThanOrEqual(53);
-        expect(error.inputPreview.endsWith('...')).toBe(true);
-        expect(error.inputLength).toBe(100);
-      }
+      const error = getError<JsonParseError>(() => parseJsonWithContext(longInput, { previewLength: 50 }));
+      expect(error).toBeInstanceOf(JsonParseError);
+      // Preview should be 50 chars + '...' = 53 chars max
+      expect(error.inputPreview.length).toBeLessThanOrEqual(53);
+      expect(error.inputPreview.endsWith('...')).toBe(true);
+      expect(error.inputLength).toBe(100);
     });
 
     it('should handle inputs exactly at previewLength boundary', () => {
       const exactInput = 'a'.repeat(200);
-      try {
-        parseJsonWithContext(exactInput);
-        expect.fail('Should have thrown');
-      } catch (e) {
-        expect(e).toBeInstanceOf(JsonParseError);
-        const error = e as JsonParseError;
-        // Input is exactly 200, so should NOT be truncated
-        expect(error.inputPreview).toBe(exactInput);
-        expect(error.inputPreview.endsWith('...')).toBe(false);
-      }
+      const error = getError<JsonParseError>(() => parseJsonWithContext(exactInput));
+      expect(error).toBeInstanceOf(JsonParseError);
+      // Input is exactly 200, so should NOT be truncated
+      expect(error.inputPreview).toBe(exactInput);
+      expect(error.inputPreview.endsWith('...')).toBe(false);
     });
 
     it('should handle inputs one character over previewLength boundary', () => {
       const overInput = 'b'.repeat(201);
-      try {
-        parseJsonWithContext(overInput);
-        expect.fail('Should have thrown');
-      } catch (e) {
-        expect(e).toBeInstanceOf(JsonParseError);
-        const error = e as JsonParseError;
-        // Input is 201 chars, so should be truncated to 200 + '...'
-        expect(error.inputPreview.length).toBe(203);
-        expect(error.inputPreview.endsWith('...')).toBe(true);
-      }
+      const error = getError<JsonParseError>(() => parseJsonWithContext(overInput));
+      expect(error).toBeInstanceOf(JsonParseError);
+      // Input is 201 chars, so should be truncated to 200 + '...'
+      expect(error.inputPreview.length).toBe(203);
+      expect(error.inputPreview.endsWith('...')).toBe(true);
     });
   });
 
@@ -254,91 +227,56 @@ describe('parseJsonWithContext', () => {
 
   describe('error cause chain', () => {
     it('should set error.cause to original error', () => {
-      try {
-        parseJsonWithContext('{"invalid": }');
-        expect.fail('Should have thrown');
-      } catch (e) {
-        expect(e).toBeInstanceOf(JsonParseError);
-        const error = e as JsonParseError;
-        expect(error.cause).toBe(error.originalError);
-      }
+      const error = getError<JsonParseError>(() => parseJsonWithContext('{"invalid": }'));
+      expect(error).toBeInstanceOf(JsonParseError);
+      expect(error.cause).toBe(error.originalError);
     });
 
     it('should preserve stack trace from original error', () => {
-      try {
-        parseJsonWithContext('not json');
-        expect.fail('Should have thrown');
-      } catch (e) {
-        expect(e).toBeInstanceOf(JsonParseError);
-        const error = e as JsonParseError;
-        expect(error.originalError.stack).toBeDefined();
-        expect(error.originalError.stack).toContain('SyntaxError');
-      }
+      const error = getError<JsonParseError>(() => parseJsonWithContext('not json'));
+      expect(error).toBeInstanceOf(JsonParseError);
+      expect(error.originalError.stack).toBeDefined();
+      expect(error.originalError.stack).toContain('SyntaxError');
     });
 
     it('should have its own stack trace', () => {
-      try {
-        parseJsonWithContext('not json');
-        expect.fail('Should have thrown');
-      } catch (e) {
-        expect(e).toBeInstanceOf(JsonParseError);
-        const error = e as JsonParseError;
-        expect(error.stack).toBeDefined();
-        expect(error.stack).toContain('JsonParseError');
-      }
+      const error = getError<JsonParseError>(() => parseJsonWithContext('not json'));
+      expect(error).toBeInstanceOf(JsonParseError);
+      expect(error.stack).toBeDefined();
+      expect(error.stack).toContain('JsonParseError');
     });
   });
 
   describe('custom context in error message', () => {
     it('should use default context "JSON" when not specified', () => {
-      try {
-        parseJsonWithContext('invalid');
-        expect.fail('Should have thrown');
-      } catch (e) {
-        expect(e).toBeInstanceOf(JsonParseError);
-        expect((e as JsonParseError).message).toContain('JSON');
-      }
+      const error = getError<JsonParseError>(() => parseJsonWithContext('invalid'));
+      expect(error).toBeInstanceOf(JsonParseError);
+      expect(error.message).toContain('JSON');
     });
 
     it('should use custom context in error message', () => {
-      try {
-        parseJsonWithContext('invalid', { context: 'session message' });
-        expect.fail('Should have thrown');
-      } catch (e) {
-        expect(e).toBeInstanceOf(JsonParseError);
-        expect((e as JsonParseError).message).toContain('session message');
-      }
+      const error = getError<JsonParseError>(() => parseJsonWithContext('invalid', { context: 'session message' }));
+      expect(error).toBeInstanceOf(JsonParseError);
+      expect(error.message).toContain('session message');
     });
 
     it('should include "Invalid" prefix in error message', () => {
-      try {
-        parseJsonWithContext('invalid', { context: 'API response' });
-        expect.fail('Should have thrown');
-      } catch (e) {
-        expect(e).toBeInstanceOf(JsonParseError);
-        expect((e as JsonParseError).message).toMatch(/^Invalid API response:/);
-      }
+      const error = getError<JsonParseError>(() => parseJsonWithContext('invalid', { context: 'API response' }));
+      expect(error).toBeInstanceOf(JsonParseError);
+      expect(error.message).toMatch(/^Invalid API response:/);
     });
   });
 
   describe('JsonParseError class', () => {
     it('should have name "JsonParseError"', () => {
-      try {
-        parseJsonWithContext('invalid');
-        expect.fail('Should have thrown');
-      } catch (e) {
-        expect(e).toBeInstanceOf(JsonParseError);
-        expect((e as JsonParseError).name).toBe('JsonParseError');
-      }
+      const error = getError<JsonParseError>(() => parseJsonWithContext('invalid'));
+      expect(error).toBeInstanceOf(JsonParseError);
+      expect(error.name).toBe('JsonParseError');
     });
 
     it('should be an instance of Error', () => {
-      try {
-        parseJsonWithContext('invalid');
-        expect.fail('Should have thrown');
-      } catch (e) {
-        expect(e).toBeInstanceOf(Error);
-      }
+      const error = getError<Error>(() => parseJsonWithContext('invalid'));
+      expect(error).toBeInstanceOf(Error);
     });
   });
 });

@@ -22,7 +22,34 @@ export default defineConfig({
                 '**/*.d.ts',
                 '**/*.config.*',
                 '**/mockData/**',
+                '**/*.test.ts',
+                // Server-dependent modules - tested via integration tests (daemon.integration.test.ts)
+                // These require a running happy-server to test properly
+                'src/daemon/**',
+                'src/codex/**',
+                'src/api/api.ts',
+                'src/api/apiSession.ts',
+                'src/api/apiMachine.ts',
+                'src/api/rpc/**',
+                'src/api/notifications.ts',
+                'src/api/socketUtils.ts',
+                'src/api/webAuth.ts',
+                // UI modules that require Ink/React rendering context
+                'src/ui/ink/**',
+                'src/ui/auth.ts',
+                // Entry points and CLI-specific modules
+                'src/index.ts',
+                'src/lib.ts',
+                // Modules that depend on session handlers in interactive mode
+                'src/modules/common/**',
+                'src/claude/sessionHandler.ts',
+                'src/claude/utils/sendToHappyServer.ts',
             ],
+            thresholds: {
+                lines: 60,
+                functions: 60,
+                branches: 50,
+            },
         },
         env: {
             ...process.env,

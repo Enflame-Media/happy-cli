@@ -7,7 +7,7 @@ export async function awaitFileExist(file: string, timeout: number = 10000) {
         try {
             await access(file);
             return true;
-        } catch (e) {
+        } catch {
             await delay(1000);
         }
     }

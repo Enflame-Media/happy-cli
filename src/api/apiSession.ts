@@ -12,6 +12,7 @@ import { AsyncLock } from '@/utils/lock';
 import { RpcHandlerManager } from './rpc/RpcHandlerManager';
 import { registerCommonHandlers } from '../modules/common/registerCommonHandlers';
 import { SocketDisconnectedError } from './socketUtils';
+import { extractErrorType, SyncMetrics, SyncMetricsCollector, SyncOutcome } from './syncMetrics';
 
 /**
  * Event types emitted by ApiSessionClient
@@ -21,6 +22,12 @@ export interface ApiSessionClientEvents {
     stateReconciled: (details: { source: 'server' | 'local', agentStateUpdated: boolean, metadataUpdated: boolean }) => void;
     /** Emitted when a message is received */
     message: (data: unknown) => void;
+    /**
+     * Emitted after each sync operation completes with current metrics snapshot.
+     * Use this for external telemetry collection or monitoring.
+     * @see HAP-166 for metrics details
+     */
+    syncMetrics: (metrics: SyncMetrics) => void;
 }
 
 /**
@@ -52,6 +59,8 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
     private hasConnectedBefore = false;
     /** Tracks if we've shown a disconnection warning to avoid spam */
     private hasShownDisconnectWarning = false;
+    /** Collects telemetry metrics for sync operations @see HAP-166 */
+    private readonly syncMetricsCollector = new SyncMetricsCollector();
 
     constructor(token: string, session: Session) {
         super()
@@ -130,13 +139,16 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
 
             // On reconnection, request state sync to reconcile any changes that occurred during disconnection
             if (this.hasConnectedBefore) {
+                // Record reconnection for metrics before triggering sync
+                this.syncMetricsCollector.recordReconnect();
+
                 logger.debug('[API] Reconnected - requesting state reconciliation');
                 // Notify user of successful reconnection (only if we had warned about disconnect)
                 if (this.hasShownDisconnectWarning) {
                     logger.info('[Happy] Reconnected to server');
                     this.hasShownDisconnectWarning = false;
                 }
-                this.requestStateSync().catch((error) => {
+                this.requestStateSync(true).catch((error) => {
                     logger.debug('[API] State reconciliation failed:', error);
                 });
             }
@@ -151,6 +163,8 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
         this.socket.on('disconnect', (reason) => {
             logger.debug('[API] Socket disconnected:', reason);
             this.rpcHandlerManager.onSocketDisconnect();
+            // Record disconnection for metrics
+            this.syncMetricsCollector.recordDisconnect();
             // Notify user of disconnection (only once, avoid spam during reconnection attempts)
             if (!this.hasShownDisconnectWarning && this.hasConnectedBefore) {
                 logger.warn('[Happy] Disconnected from server, reconnecting...');
@@ -567,18 +581,33 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
      * - Version rollback prevention: Only applies server state if version is strictly greater
      * - Partial sync failure: Each state type (agent/metadata) syncs independently
      *
+     * @param isReconnectionSync Whether this sync was triggered by a reconnection event (for metrics)
      * @emits stateReconciled - When state changes are applied from server
+     * @emits syncMetrics - After sync completes with current metrics snapshot
      * @throws Never throws - all errors are logged and handled internally
      */
-    async requestStateSync(): Promise<void> {
+    async requestStateSync(isReconnectionSync = false): Promise<void> {
+        // Start metrics tracking
+        this.syncMetricsCollector.recordSyncStart(isReconnectionSync);
+
+        // Track outcomes for metrics
+        let syncOutcome: SyncOutcome = 'success';
+        let agentStateMismatch = false;
+        let metadataMismatch = false;
+        let errorType: string | undefined;
+
         if (!this.socket.connected) {
             logger.debug('[API] Cannot sync state - socket not connected');
+            syncOutcome = 'aborted';
+            this.syncMetricsCollector.recordSyncComplete(syncOutcome, agentStateMismatch, metadataMismatch, 'socket-not-connected');
+            this.emitSyncMetrics();
             return;
         }
 
         logger.debug('[API] Requesting state sync', {
             localAgentStateVersion: this.agentStateVersion,
-            localMetadataVersion: this.metadataVersion
+            localMetadataVersion: this.metadataVersion,
+            isReconnectionSync
         });
 
         let agentStateUpdated = false;
@@ -606,6 +635,8 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                 });
 
                 if (answer.result === 'version-mismatch') {
+                    // Track version mismatch for metrics
+                    agentStateMismatch = true;
                     // Server has newer state - apply it
                     if (answer.version > this.agentStateVersion) {
                         const previousVersion = this.agentStateVersion;
@@ -643,10 +674,14 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                     logger.debug('[API] Agent state in sync with server', { version: answer.version });
                 } else if (answer.result === 'error') {
                     logger.debug('[API] Server error during agent state sync');
+                    syncOutcome = 'error';
+                    errorType = 'agent-state-server-error';
                 }
             });
         } catch (error) {
             logger.debug('[API] Failed to sync agent state:', error);
+            syncOutcome = 'error';
+            errorType = extractErrorType(error, 'agent-state-sync-error');
             // Continue to metadata sync even if agent state sync fails
         }
 
@@ -672,6 +707,8 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                 });
 
                 if (answer.result === 'version-mismatch') {
+                    // Track version mismatch for metrics
+                    metadataMismatch = true;
                     // Server has newer metadata - apply it
                     if (answer.version > this.metadataVersion) {
                         const previousVersion = this.metadataVersion;
@@ -699,11 +736,23 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                     logger.debug('[API] Metadata in sync with server', { version: answer.version });
                 } else if (answer.result === 'error') {
                     logger.debug('[API] Server error during metadata sync');
+                    syncOutcome = 'error';
+                    errorType = 'metadata-server-error';
                 }
             });
         } catch (error) {
             logger.debug('[API] Failed to sync metadata:', error);
+            syncOutcome = 'error';
+            errorType = extractErrorType(error, 'metadata-sync-error');
         }
+
+        // Determine final sync outcome based on version mismatches
+        if (syncOutcome === 'success' && (agentStateMismatch || metadataMismatch)) {
+            syncOutcome = 'version-mismatch';
+        }
+
+        // Record sync completion for metrics
+        this.syncMetricsCollector.recordSyncComplete(syncOutcome, agentStateMismatch, metadataMismatch, errorType);
 
         // Emit event if any state was updated from server
         if (agentStateUpdated || metadataUpdated) {
@@ -719,6 +768,45 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
         } else {
             logger.debug('[API] State reconciliation complete - no changes needed');
         }
+
+        // Emit metrics after sync completion
+        this.emitSyncMetrics();
+    }
+
+    /**
+     * Emit current sync metrics snapshot.
+     * Only emits if there are listeners to avoid unnecessary computation.
+     * @private
+     */
+    private emitSyncMetrics(): void {
+        // Only compute and emit metrics if there are listeners (zero-cost when not consumed)
+        if (this.listenerCount('syncMetrics') > 0) {
+            const metrics = this.syncMetricsCollector.getMetrics();
+            this.emit('syncMetrics', metrics);
+            logger.debug('[API] Sync metrics emitted', {
+                totalSyncs: metrics.totalSyncs,
+                syncSuccesses: metrics.syncSuccesses,
+                syncFailures: metrics.syncFailures,
+                averageSyncDurationMs: metrics.averageSyncDurationMs
+            });
+        }
+    }
+
+    /**
+     * Get current sync metrics snapshot.
+     * Use this for external telemetry collection or monitoring.
+     * @see HAP-166
+     */
+    getSyncMetrics(): SyncMetrics {
+        return this.syncMetricsCollector.getMetrics();
+    }
+
+    /**
+     * Reset sync metrics to initial state.
+     * Useful for testing or when starting a new logical session.
+     */
+    resetSyncMetrics(): void {
+        this.syncMetricsCollector.reset();
     }
 
     async close() {

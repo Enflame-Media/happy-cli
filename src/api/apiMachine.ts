@@ -111,7 +111,7 @@ export class ApiMachineClient {
         requestShutdown
     }: MachineRpcHandlers) {
         // Register spawn session handler
-        this.rpcHandlerManager.registerHandler('spawn-happy-session', async (params: any, signal) => {
+        this.rpcHandlerManager.registerHandler('spawn-happy-session', async (params: any, _signal) => {
             const { directory, sessionId, machineId, approvedNewDirectoryCreation, agent, token } = params || {};
             logger.debug(`[API MACHINE] Spawning session with params: ${JSON.stringify(params)}`);
 
@@ -136,7 +136,7 @@ export class ApiMachineClient {
         });
 
         // Register stop session handler  
-        this.rpcHandlerManager.registerHandler('stop-session', (params: any, signal) => {
+        this.rpcHandlerManager.registerHandler('stop-session', (params: any, _signal) => {
             const { sessionId } = params || {};
 
             if (!sessionId) {
@@ -153,7 +153,7 @@ export class ApiMachineClient {
         });
 
         // Register stop daemon handler
-        this.rpcHandlerManager.registerHandler('stop-daemon', (params, signal) => {
+        this.rpcHandlerManager.registerHandler('stop-daemon', (_params, _signal) => {
             logger.debug('[API MACHINE] Received stop-daemon RPC request');
 
             // Trigger shutdown callback after a delay

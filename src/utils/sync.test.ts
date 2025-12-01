@@ -75,9 +75,9 @@ describe('InvalidateSync', () => {
     });
 
     it('should resolve pending promises after stop()', async () => {
-        let commandCallCount = 0;
+        let _commandCallCount = 0;
         const sync = new InvalidateSync(async () => {
-            commandCallCount++;
+            _commandCallCount++;
             // Simulate long-running command that would block
             await new Promise(resolve => setTimeout(resolve, 1000));
         });
@@ -230,13 +230,13 @@ describe('InvalidateSync', () => {
 
     it('should abort long-running command when stop() is called', async () => {
         let commandStarted = false;
-        let commandCompleted = false;
+        let _commandCompleted = false;
 
         const sync = new InvalidateSync(async () => {
             commandStarted = true;
             // Simulate a long operation
             await new Promise(resolve => setTimeout(resolve, 10000));
-            commandCompleted = true;
+            _commandCompleted = true;
         });
 
         sync.invalidate();

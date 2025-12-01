@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { logger } from '@/ui/logger'
 import { Expo, ExpoPushMessage } from 'expo-server-sdk'
-import { AppError, ErrorCodes, getSafeErrorMessage } from '@/utils/errors'
+import { AppError, ErrorCodes } from '@/utils/errors'
 import { configuration } from '@/configuration'
 
 export interface PushToken {
@@ -100,7 +100,7 @@ export class PushNotificationClient {
                     
                     // Success - break out of retry loop
                     break
-                } catch (error) {
+                } catch {
                     const elapsed = Date.now() - startTime
                     if (elapsed >= timeout) {
                         logger.warn('[PUSH] Timeout reached after 5 minutes, giving up on chunk')

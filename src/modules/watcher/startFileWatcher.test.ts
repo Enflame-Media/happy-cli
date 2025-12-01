@@ -19,7 +19,7 @@ describe('startFileWatcher', () => {
         // Clean up
         try {
             rmSync(testDir, { recursive: true, force: true });
-        } catch (e) {
+        } catch {
             // Ignore cleanup errors
         }
     });

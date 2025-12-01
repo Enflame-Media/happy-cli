@@ -8,7 +8,7 @@ import { PushNotificationClient } from './pushNotifications';
 import { configuration } from '@/configuration';
 import chalk from 'chalk';
 import { Credentials } from '@/persistence';
-import { AppError, ErrorCodes, getSafeErrorMessage } from '@/utils/errors';
+import { AppError, ErrorCodes } from '@/utils/errors';
 import { createDeduplicator, type Deduplicator } from '@/utils/requestDeduplication';
 
 export class ApiClient {

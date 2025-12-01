@@ -135,7 +135,7 @@ export type SpawnSessionResult =
 export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager) {
 
     // Shell command handler - executes commands in the default shell
-    rpcHandlerManager.registerHandler<BashRequest, BashResponse>('bash', async (data, signal) => {
+    rpcHandlerManager.registerHandler<BashRequest, BashResponse>('bash', async (data, _signal) => {
         logger.debug('Shell command request:', data.command);
 
         try {
@@ -185,7 +185,7 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager) {
     });
 
     // Read file handler - returns base64 encoded content
-    rpcHandlerManager.registerHandler<ReadFileRequest, ReadFileResponse>('readFile', async (data, signal) => {
+    rpcHandlerManager.registerHandler<ReadFileRequest, ReadFileResponse>('readFile', async (data, _signal) => {
         logger.debug('Read file request:', data.path);
 
         try {
@@ -199,7 +199,7 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager) {
     });
 
     // Write file handler - with hash verification
-    rpcHandlerManager.registerHandler<WriteFileRequest, WriteFileResponse>('writeFile', async (data, signal) => {
+    rpcHandlerManager.registerHandler<WriteFileRequest, WriteFileResponse>('writeFile', async (data, _signal) => {
         logger.debug('Write file request:', data.path);
 
         try {
@@ -259,7 +259,7 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager) {
     });
 
     // List directory handler
-    rpcHandlerManager.registerHandler<ListDirectoryRequest, ListDirectoryResponse>('listDirectory', async (data, signal) => {
+    rpcHandlerManager.registerHandler<ListDirectoryRequest, ListDirectoryResponse>('listDirectory', async (data, _signal) => {
         logger.debug('List directory request:', data.path);
 
         try {
@@ -311,7 +311,7 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager) {
     });
 
     // Get directory tree handler - recursive with depth control
-    rpcHandlerManager.registerHandler<GetDirectoryTreeRequest, GetDirectoryTreeResponse>('getDirectoryTree', async (data, signal) => {
+    rpcHandlerManager.registerHandler<GetDirectoryTreeRequest, GetDirectoryTreeResponse>('getDirectoryTree', async (data, _signal) => {
         logger.debug('Get directory tree request:', data.path, 'maxDepth:', data.maxDepth);
 
         // Helper function to build tree recursively
@@ -392,7 +392,7 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager) {
     });
 
     // Ripgrep handler - raw interface to ripgrep
-    rpcHandlerManager.registerHandler<RipgrepRequest, RipgrepResponse>('ripgrep', async (data, signal) => {
+    rpcHandlerManager.registerHandler<RipgrepRequest, RipgrepResponse>('ripgrep', async (data, _signal) => {
         logger.debug('Ripgrep request with args:', data.args, 'cwd:', data.cwd);
 
         try {
@@ -413,7 +413,7 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager) {
     });
 
     // Difftastic handler - raw interface to difftastic
-    rpcHandlerManager.registerHandler<DifftasticRequest, DifftasticResponse>('difftastic', async (data, signal) => {
+    rpcHandlerManager.registerHandler<DifftasticRequest, DifftasticResponse>('difftastic', async (data, _signal) => {
         logger.debug('Difftastic request with args:', data.args, 'cwd:', data.cwd);
 
         try {

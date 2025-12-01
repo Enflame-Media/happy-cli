@@ -10,6 +10,19 @@
 import { describe, it, expect } from 'vitest';
 import { delay, exponentialBackoffDelay, createBackoff, backoff, type BackoffFunc } from './time';
 
+/** Helper to capture async errors for testing - avoids no-conditional-expect lint warnings */
+async function getAsyncError<T extends Error>(fn: () => Promise<unknown>): Promise<T> {
+  try {
+    await fn();
+    throw new Error('Expected function to throw but it did not');
+  } catch (e) {
+    if (e instanceof Error && e.message === 'Expected function to throw but it did not') {
+      throw e;
+    }
+    return e as T;
+  }
+}
+
 describe('delay', () => {
     it('should resolve after specified milliseconds', async () => {
         const start = Date.now();
@@ -26,12 +39,9 @@ describe('delay', () => {
 
         await expect(delay(1000, controller.signal)).rejects.toThrow('Aborted');
 
-        try {
-            await delay(1000, controller.signal);
-        } catch (e) {
-            expect(e).toBeInstanceOf(DOMException);
-            expect((e as DOMException).name).toBe('AbortError');
-        }
+        const error = await getAsyncError<DOMException>(() => delay(1000, controller.signal));
+        expect(error).toBeInstanceOf(DOMException);
+        expect(error.name).toBe('AbortError');
     });
 
     it('should reject when signal is aborted during delay', async () => {
@@ -44,12 +54,9 @@ describe('delay', () => {
 
         await expect(delayPromise).rejects.toThrow('Aborted');
 
-        try {
-            await delay(1000, controller.signal);
-        } catch (e) {
-            expect(e).toBeInstanceOf(DOMException);
-            expect((e as DOMException).name).toBe('AbortError');
-        }
+        const error = await getAsyncError<DOMException>(() => delay(1000, controller.signal));
+        expect(error).toBeInstanceOf(DOMException);
+        expect(error.name).toBe('AbortError');
     });
 
     it('should complete normally without abort signal', async () => {
@@ -216,7 +223,7 @@ describe('createBackoff', () => {
             // Abort immediately
             controller.abort();
 
-            await expect(backoffFn(async () => 'test', controller.signal)).rejects.toThrow('Aborted');
+            await expect(backoffFn(async () => 'test', controller.signal)).rejects.toThrow(/Aborted/);
         });
 
         it('should abort during retry delay', async () => {
@@ -232,21 +239,18 @@ describe('createBackoff', () => {
             // Abort after first failure starts delay
             setTimeout(() => controller.abort(), 50);
 
-            await expect(promise).rejects.toThrow('Aborted');
+            await expect(promise).rejects.toThrow(/Aborted/);
             expect(attempts).toBeGreaterThanOrEqual(1);
         });
 
         it('should propagate AbortError from callback', async () => {
             const backoffFn = createBackoff();
 
-            try {
-                await backoffFn(async () => {
-                    throw new DOMException('Aborted', 'AbortError');
-                });
-            } catch (e) {
-                expect(e).toBeInstanceOf(DOMException);
-                expect((e as DOMException).name).toBe('AbortError');
-            }
+            const error = await getAsyncError<DOMException>(() => backoffFn(async () => {
+                throw new DOMException('Aborted', 'AbortError');
+            }));
+            expect(error).toBeInstanceOf(DOMException);
+            expect(error.name).toBe('AbortError');
         });
     });
 
@@ -386,7 +390,7 @@ describe('createBackoff', () => {
             await expect(backoffFn(async () => {
                 attempts++;
                 throw new Error('Fail');
-            })).rejects.toThrow();
+            })).rejects.toThrow(/Fail/);
 
             const elapsed = Date.now() - start;
             // With 3 failures and delays between [0, ~15] each, total should be under 100ms
@@ -435,7 +439,7 @@ describe('createBackoff', () => {
 
             await expect(backoffFn(async () => {
                 throw new Error('Track me');
-            })).rejects.toThrow();
+            })).rejects.toThrow('Track me');
 
             expect(errors).toHaveLength(3);
             expect(errors[0].count).toBe(1);

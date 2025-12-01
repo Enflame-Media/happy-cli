@@ -1,4 +1,4 @@
-import { EnhancedMode, PermissionMode } from "./loop";
+import { EnhancedMode } from "./loop";
 import { query, type QueryOptions as Options, type SDKMessage, type SDKSystemMessage, AbortError, SDKUserMessage } from '@/claude/sdk'
 import { claudeCheckSession } from "./utils/claudeCheckSession";
 import { join, resolve } from 'node:path';

@@ -27,7 +27,7 @@ export async function uninstall(): Promise<void> {
         try {
             execSync(`launchctl unload ${PLIST_FILE}`, { stdio: 'inherit' });
             logger.info('Daemon stopped successfully');
-        } catch (error) {
+        } catch {
             // Daemon might not be loaded, continue with removal
             logger.info('Failed to unload daemon (it might not be running)');
         }

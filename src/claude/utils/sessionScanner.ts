@@ -194,7 +194,7 @@ async function readSessionLog(projectDir: string, sessionId: string): Promise<Ra
     let file: string;
     try {
         file = await withRetry(() => readFile(expectedSessionFile, 'utf-8'));
-    } catch (error) {
+    } catch {
         logger.debug(`[SESSION_SCANNER] Session file not found: ${expectedSessionFile}`);
         return [];
     }

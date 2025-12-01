@@ -218,7 +218,7 @@ export async function claudeLocal(opts: {
                             default:
                                 logger.debug(`[ClaudeLocal] Unknown message type: ${message.type}`);
                         }
-                    } catch (e) {
+                    } catch {
                         // Not JSON, ignore (could be other output)
                         logger.debug(`[ClaudeLocal] Non-JSON line from fd3: ${line}`);
                     }
@@ -237,7 +237,7 @@ export async function claudeLocal(opts: {
                     updateThinking(false);
                 });
             }
-            child.on('error', (error) => {
+            child.on('error', (_error) => {
                 // Ignore
             });
             child.on('exit', (code, signal) => {

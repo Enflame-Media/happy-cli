@@ -185,7 +185,7 @@ export class CodexPermissionHandler {
     private setupRpcHandler(): void {
         this.session.rpcHandlerManager.registerHandler<PermissionResponse, void>(
             'permission',
-            async (response, signal) => {
+            async (response, _signal) => {
                 // console.log(`[Codex] Permission response received:`, response);
 
                 const pending = this.pendingRequests.get(response.id);
@@ -240,7 +240,7 @@ export class CodexPermissionHandler {
      */
     reset(): void {
         // Reject all pending requests
-        for (const [id, pending] of this.pendingRequests.entries()) {
+        for (const [_id, pending] of this.pendingRequests.entries()) {
             pending.reject(new Error('Session reset'));
         }
         this.pendingRequests.clear();

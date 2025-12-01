@@ -11,6 +11,19 @@ import {
   ValidationError
 } from './zodErrors'
 
+/** Helper to capture thrown errors for testing - avoids no-conditional-expect lint warnings */
+function getError<T extends Error>(fn: () => unknown): T {
+  try {
+    fn();
+    throw new Error('Expected function to throw but it did not');
+  } catch (e) {
+    if (e instanceof Error && e.message === 'Expected function to throw but it did not') {
+      throw e;
+    }
+    return e as T;
+  }
+}
+
 describe('formatZodError', () => {
   it('formats simple field errors', () => {
     const schema = z.object({
@@ -20,11 +33,9 @@ describe('formatZodError', () => {
 
     const result = schema.safeParse({ name: 123, age: 'not a number' })
     expect(result.success).toBe(false)
-    if (!result.success) {
-      const formatted = formatZodError(result.error)
-      expect(formatted).toContain('name')
-      expect(formatted).toContain('age')
-    }
+    const formatted = formatZodError((result as any).error)
+    expect(formatted).toContain('name')
+    expect(formatted).toContain('age')
   })
 
   it('formats nested field errors with dot notation', () => {
@@ -40,10 +51,8 @@ describe('formatZodError', () => {
       user: { profile: { email: 'not-an-email' } }
     })
     expect(result.success).toBe(false)
-    if (!result.success) {
-      const formatted = formatZodError(result.error)
-      expect(formatted).toContain('user.profile.email')
-    }
+    const formatted = formatZodError((result as any).error)
+    expect(formatted).toContain('user.profile.email')
   })
 
   it('redacts sensitive field names containing "key"', () => {
@@ -54,14 +63,12 @@ describe('formatZodError', () => {
 
     const result = schema.safeParse({ publicKey: 123, machineKey: 456 })
     expect(result.success).toBe(false)
-    if (!result.success) {
-      const formatted = formatZodError(result.error)
-      // Should show field name but redact specific error details
-      expect(formatted).toContain('publicKey: Invalid value')
-      expect(formatted).toContain('machineKey: Invalid value')
-      // Should NOT contain the actual error message
-      expect(formatted).not.toContain('Expected string')
-    }
+    const formatted = formatZodError((result as any).error)
+    // Should show field name but redact specific error details
+    expect(formatted).toContain('publicKey: Invalid value')
+    expect(formatted).toContain('machineKey: Invalid value')
+    // Should NOT contain the actual error message
+    expect(formatted).not.toContain('Expected string')
   })
 
   it('redacts sensitive field names containing "secret"', () => {
@@ -71,10 +78,8 @@ describe('formatZodError', () => {
 
     const result = schema.safeParse({ secret: 123 })
     expect(result.success).toBe(false)
-    if (!result.success) {
-      const formatted = formatZodError(result.error)
-      expect(formatted).toContain('secret: Invalid value')
-    }
+    const formatted = formatZodError((result as any).error)
+    expect(formatted).toContain('secret: Invalid value')
   })
 
   it('redacts sensitive field names containing "token"', () => {
@@ -84,10 +89,8 @@ describe('formatZodError', () => {
 
     const result = schema.safeParse({ authToken: 123 })
     expect(result.success).toBe(false)
-    if (!result.success) {
-      const formatted = formatZodError(result.error)
-      expect(formatted).toContain('authToken: Invalid value')
-    }
+    const formatted = formatZodError((result as any).error)
+    expect(formatted).toContain('authToken: Invalid value')
   })
 
   it('redacts nested sensitive fields', () => {
@@ -99,11 +102,9 @@ describe('formatZodError', () => {
 
     const result = schema.safeParse({ encryption: { publicKey: 123 } })
     expect(result.success).toBe(false)
-    if (!result.success) {
-      const formatted = formatZodError(result.error)
-      // Both 'encryption' and 'publicKey' are sensitive patterns
-      expect(formatted).toContain('encryption.publicKey: Invalid value')
-    }
+    const formatted = formatZodError((result as any).error)
+    // Both 'encryption' and 'publicKey' are sensitive patterns
+    expect(formatted).toContain('encryption.publicKey: Invalid value')
   })
 
   it('shows detailed errors for non-sensitive fields', () => {
@@ -114,12 +115,10 @@ describe('formatZodError', () => {
 
     const result = schema.safeParse({ hostname: 123, port: -1 })
     expect(result.success).toBe(false)
-    if (!result.success) {
-      const formatted = formatZodError(result.error)
-      // Non-sensitive fields should have detailed error messages
-      expect(formatted).toContain('hostname:')
-      expect(formatted).toContain('port:')
-    }
+    const formatted = formatZodError((result as any).error)
+    // Non-sensitive fields should have detailed error messages
+    expect(formatted).toContain('hostname:')
+    expect(formatted).toContain('port:')
   })
 })
 
@@ -129,9 +128,7 @@ describe('safeParseWithError', () => {
     const result = safeParseWithError(schema, { name: 'test' })
 
     expect(result.success).toBe(true)
-    if (result.success) {
-      expect(result.data).toEqual({ name: 'test' })
-    }
+    expect((result as any).data).toEqual({ name: 'test' })
   })
 
   it('returns failure with formatted error on invalid input', () => {
@@ -139,9 +136,7 @@ describe('safeParseWithError', () => {
     const result = safeParseWithError(schema, { name: 123 })
 
     expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.error).toContain('name')
-    }
+    expect((result as any).error).toContain('name')
   })
 
   it('includes context name in error message', () => {
@@ -149,9 +144,7 @@ describe('safeParseWithError', () => {
     const result = safeParseWithError(schema, { name: 123 }, 'user profile')
 
     expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.error).toContain('Invalid user profile')
-    }
+    expect((result as any).error).toContain('Invalid user profile')
   })
 })
 
@@ -180,14 +173,10 @@ describe('parseWithFriendlyError', () => {
   it('does NOT throw ZodError', () => {
     const schema = z.object({ name: z.string() })
 
-    try {
-      parseWithFriendlyError(schema, { name: 123 })
-      expect.fail('Should have thrown')
-    } catch (e) {
-      // Should be a regular Error, not a ZodError
-      expect(e).toBeInstanceOf(Error)
-      expect((e as any).issues).toBeUndefined() // ZodError has .issues
-    }
+    const error = getError<Error>(() => parseWithFriendlyError(schema, { name: 123 }))
+    // Should be a regular Error, not a ZodError
+    expect(error).toBeInstanceOf(Error)
+    expect((error as any).issues).toBeUndefined() // ZodError has .issues
   })
 })
 
@@ -211,12 +200,10 @@ describe('ValidationError', () => {
 
     const result = schema.safeParse({ name: 123, age: 'string' })
     expect(result.success).toBe(false)
-    if (!result.success) {
-      const error = ValidationError.fromZodError(result.error, 'user')
-      expect(error).toBeInstanceOf(ValidationError)
-      expect(error.message).toContain('Invalid user')
-      expect(error.fieldErrors.length).toBe(2)
-    }
+    const error = ValidationError.fromZodError((result as any).error, 'user')
+    expect(error).toBeInstanceOf(ValidationError)
+    expect(error.message).toContain('Invalid user')
+    expect(error.fieldErrors.length).toBe(2)
   })
 
   it('redacts sensitive fields when created from ZodError', () => {
@@ -226,10 +213,8 @@ describe('ValidationError', () => {
 
     const result = schema.safeParse({ password: 'short' })
     expect(result.success).toBe(false)
-    if (!result.success) {
-      const error = ValidationError.fromZodError(result.error)
-      expect(error.fieldErrors[0]).toContain('password: Invalid value')
-      expect(error.fieldErrors[0]).not.toContain('at least 8')
-    }
+    const error = ValidationError.fromZodError((result as any).error)
+    expect(error.fieldErrors[0]).toContain('password: Invalid value')
+    expect(error.fieldErrors[0]).not.toContain('at least 8')
   })
 })

@@ -6,6 +6,19 @@ import {
     InvalidSessionIdError
 } from './sessionValidation';
 
+/** Helper to capture thrown errors for testing - avoids no-conditional-expect lint warnings */
+function getError<T extends Error>(fn: () => unknown): T {
+  try {
+    fn();
+    throw new Error('Expected function to throw but it did not');
+  } catch (e) {
+    if (e instanceof Error && e.message === 'Expected function to throw but it did not') {
+      throw e;
+    }
+    return e as T;
+  }
+}
+
 describe('sessionValidation', () => {
     describe('validateSessionId', () => {
         it('should accept valid UUID v4 format', () => {
@@ -54,14 +67,10 @@ describe('sessionValidation', () => {
         it('should truncate long session IDs in error messages', () => {
             const longId = 'x'.repeat(100);
 
-            try {
-                validateSessionId(longId);
-                expect.fail('Should have thrown');
-            } catch (error) {
-                expect(error).toBeInstanceOf(InvalidSessionIdError);
-                expect((error as InvalidSessionIdError).message).toContain('...');
-                expect((error as InvalidSessionIdError).message.length).toBeLessThan(150);
-            }
+            const error = getError<InvalidSessionIdError>(() => validateSessionId(longId));
+            expect(error).toBeInstanceOf(InvalidSessionIdError);
+            expect(error.message).toContain('...');
+            expect(error.message.length).toBeLessThan(150);
         });
     });
 

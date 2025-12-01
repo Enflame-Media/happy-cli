@@ -208,13 +208,13 @@ export async function startDaemon(): Promise<void> {
     const spawnSession = async (options: SpawnSessionOptions): Promise<SpawnSessionResult> => {
       logger.debugLargeJson('[DAEMON RUN] Spawning session', options);
 
-      const { directory, sessionId, machineId, approvedNewDirectoryCreation = true } = options;
+      const { directory, sessionId: _sessionId, machineId: _machineId, approvedNewDirectoryCreation = true } = options;
       let directoryCreated = false;
 
       try {
         await fs.access(directory);
         logger.debug(`[DAEMON RUN] Directory exists: ${directory}`);
-      } catch (error) {
+      } catch {
         logger.debug(`[DAEMON RUN] Directory doesn't exist, creating: ${directory}`);
 
         // Check if directory creation is approved
@@ -553,7 +553,7 @@ export async function startDaemon(): Promise<void> {
           try {
             // Check if process is still alive (signal 0 doesn't kill, just checks)
             process.kill(pid, 0);
-          } catch (error) {
+          } catch {
             // Process is dead - use centralized cleanup which handles temp directories
             logger.debug(`[DAEMON RUN] Removing stale session PID ${pid}`);
             onChildExited(pid);

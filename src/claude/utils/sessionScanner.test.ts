@@ -42,7 +42,7 @@ describe('sessionScanner', () => {
     // TEST SCENARIO:
     // Phase 1: User says "lol" → Assistant responds "lol" → Session closes
     // Phase 2: User resumes with NEW session ID → User says "run ls tool" → Assistant runs LS tool → Shows files
-    // 
+    //
     // Key point: When resuming, Claude creates a NEW session file with:
     // - Summary line
     // - Complete history from previous session (with NEW session ID)
@@ -52,37 +52,38 @@ describe('sessionScanner', () => {
       workingDirectory: testDir,
       onMessage: (msg) => collectedMessages.push(msg)
     })
-    
+
     // PHASE 1: Initial session (0-say-lol-session.jsonl)
     const fixture1 = await readFile(join(__dirname, '__fixtures__', '0-say-lol-session.jsonl'), 'utf-8')
     const lines1 = fixture1.split('\n').filter(line => line.trim())
-    
+
     const sessionId1 = '93a9705e-bc6a-406d-8dce-8acc014dedbd'
     const sessionFile1 = join(projectDir, `${sessionId1}.jsonl`)
-    
+
     // Write first line
     await writeFile(sessionFile1, lines1[0] + '\n')
     scanner.onNewSession(sessionId1)
     await new Promise(resolve => setTimeout(resolve, 100))
-    
+
     expect(collectedMessages).toHaveLength(1)
-    expect(collectedMessages[0].type).toBe('user')
-    if (collectedMessages[0].type === 'user') {
-      const content = collectedMessages[0].message.content
-      const text = typeof content === 'string' ? content : (content as any)[0].text
-      expect(text).toBe('say lol')
-    }
+    const msg0 = collectedMessages[0];
+    expect(msg0.type).toBe('user')
+    // Type assertion safe here because we just checked the type
+    const content0 = (msg0 as any).message.content
+    const text0 = typeof content0 === 'string' ? content0 : content0[0].text
+    expect(text0).toBe('say lol')
     
     // Write second line with delay
     await new Promise(resolve => setTimeout(resolve, 50))
     await appendFile(sessionFile1, lines1[1] + '\n')
     await new Promise(resolve => setTimeout(resolve, 200))
-    
+
+
     expect(collectedMessages).toHaveLength(2)
-    expect(collectedMessages[1].type).toBe('assistant')
-    if (collectedMessages[1].type === 'assistant') {
-      expect((collectedMessages[1].message.content as any)[0].text).toBe('lol')
-    }
+    const msg1 = collectedMessages[1];
+    expect(msg1.type).toBe('assistant')
+    // Type assertion safe here because we just checked the type
+    expect(((msg1 as any).message.content as any)[0].text).toBe('lol')
     
     // PHASE 2: Resumed session (1-continue-run-ls-tool.jsonl)
     const fixture2 = await readFile(join(__dirname, '__fixtures__', '1-continue-run-ls-tool.jsonl'), 'utf-8')
@@ -118,9 +119,9 @@ describe('sessionScanner', () => {
     const userMessages = collectedMessages.filter(m => m.type === 'user')
     const lastUserMsg = userMessages[userMessages.length - 1]
     expect(lastUserMsg).toBeDefined()
-    if (lastUserMsg && lastUserMsg.type === 'user') {
-      expect(lastUserMsg.message.content).toBe('run ls tool ')
-    }
+    expect(lastUserMsg.type).toBe('user')
+    // Type assertion safe here because we just checked type and defined
+    expect((lastUserMsg as any).message.content).toBe('run ls tool ')
     
     // Write remaining lines (assistant tool use, tool result, final assistant message) - starting from line 4
     for (let i = 4; i < lines2.length; i++) {
@@ -138,73 +139,11 @@ describe('sessionScanner', () => {
     // Verify last message is assistant with the file listing
     const lastAssistantMsg = collectedMessages[collectedMessages.length - 1]
     expect(lastAssistantMsg.type).toBe('assistant')
-    if (lastAssistantMsg.type === 'assistant' && lastAssistantMsg.message.content) {
-      const content = (lastAssistantMsg.message.content as any)[0].text
-      expect(content).toContain('0-say-lol-session.jsonl')
-      expect(content).toContain('readme.md')
-    }
+    // Type assertion safe here because we just checked the type
+    const lastContent = ((lastAssistantMsg as any).message.content as any)[0].text
+    expect(lastContent).toContain('0-say-lol-session.jsonl')
+    expect(lastContent).toContain('readme.md')
   })
   
-  it('should not process duplicate assistant messages with same message ID', async () => {
-    // Currently broken unclear if we need this or not post migrating to sdk & removeing deduplication
-    return;
-
-    // scanner = await createSessionScanner({
-    //   sessionId: null,
-    //   workingDirectory: testDir,
-    //   onMessage: (msg) => collectedMessages.push(msg)
-    // })
-    
-    // const fixture = await readFile(join(__dirname, '__fixtures__', 'duplicate-assistant-response.jsonl'), 'utf-8')
-    // const lines = fixture.split('\n').filter(line => line.trim())
-    
-    // const sessionId = 'b91d4412-e6c4-4e51-bb1b-585bcd78aca4'
-    // const sessionFile = join(projectDir, `${sessionId}.jsonl`)
-    
-    // // Write first user message
-    // await writeFile(sessionFile, lines[0] + '\n')
-    // scanner.onNewSession(sessionId)
-    // await new Promise(resolve => setTimeout(resolve, 100))
-    
-    // expect(collectedMessages).toHaveLength(1)
-    // expect(collectedMessages[0].type).toBe('user')
-    
-    // // Write first assistant response
-    // await appendFile(sessionFile, lines[1] + '\n')
-    // await new Promise(resolve => setTimeout(resolve, 100))
-    
-    // expect(collectedMessages).toHaveLength(2)
-    // expect(collectedMessages[1].type).toBe('assistant')
-    // const firstAssistantMsg = collectedMessages[1]
-    // if (firstAssistantMsg.type === 'assistant') {
-    //   expect((firstAssistantMsg.message.content as any)[0].text).toBe('lol')
-    //   expect(firstAssistantMsg.message.id).toBe('msg_01R62tkBs9tw5X76JmpWXYbc')
-    // }
-    
-    // // Write duplicate assistant response (same message ID, different UUID)
-    // await appendFile(sessionFile, lines[2] + '\n')
-    // await new Promise(resolve => setTimeout(resolve, 100))
-    
-    // // Should NOT process the duplicate - still only 2 messages
-    // expect(collectedMessages).toHaveLength(2)
-    
-    // // Write next user message
-    // await appendFile(sessionFile, lines[3] + '\n')
-    // await new Promise(resolve => setTimeout(resolve, 100))
-    
-    // expect(collectedMessages).toHaveLength(3)
-    // expect(collectedMessages[2].type).toBe('user')
-    
-    // // Write final assistant response
-    // await appendFile(sessionFile, lines[4] + '\n')
-    // await new Promise(resolve => setTimeout(resolve, 100))
-    
-    // expect(collectedMessages).toHaveLength(4)
-    // expect(collectedMessages[3].type).toBe('assistant')
-    // const lastAssistantMsg = collectedMessages[3]
-    // if (lastAssistantMsg.type === 'assistant') {
-    //   expect((lastAssistantMsg.message.content as any)[0].text).toBe('kekr')
-    //   expect(lastAssistantMsg.message.id).toBe('msg_01KWeuP88pkzRtXmggJRnQmV')
-    // }
-  })
+  it.todo('should not process duplicate assistant messages with same message ID');
 })

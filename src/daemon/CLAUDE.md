@@ -112,6 +112,7 @@ Local HTTP server (127.0.0.1 only) provides:
 - `/stop-session` - terminates specific session
 - `/spawn-session` - creates new session (used by integration tests)
 - `/stop` - graceful daemon shutdown
+- `/health` - health check for monitoring (GET, returns status, uptime, sessions, memory, rate limits)
 
 ## 4. Process Discovery and Cleanup
 
@@ -173,6 +174,25 @@ Version mismatch test simulates npm upgrade:
 - Daemon's compiled version != package.json on disk
 - Critical timing: heartbeat interval must exceed rebuild time
 - pkgroll doesn't update compiled imports, must use full yarn build
+
+## 8. Health Monitoring
+
+The daemon exposes a health check endpoint for monitoring tools:
+
+- **Endpoint:** `GET /health`
+- **Authentication:** Requires `X-Daemon-Auth` header
+- **Response:**
+  - `status`: `'healthy'` | `'degraded'` | `'unhealthy'`
+  - `uptime`: milliseconds since daemon started
+  - `sessions`: number of tracked sessions
+  - `memory`: `{ rss, heapUsed, heapTotal, external }` (bytes)
+  - `rateLimit`: `{ config, metrics, current }` - rate limiter state
+  - `timestamp`: ISO string of response time
+
+**Health Status Logic:**
+- `healthy`: heap usage < 75%
+- `degraded`: heap usage 75-90%
+- `unhealthy`: heap usage > 90%
 
 # Improvements
 

@@ -12,7 +12,7 @@
  * replicates the critical lock-protected update logic.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { AsyncLock } from '@/utils/lock';
 
 /**
@@ -136,14 +136,14 @@ describe('ApiSessionClient concurrent state update patterns', () => {
             const manager = new ConcurrentStateManager<Metadata>({ value: 0 }, 0);
 
             // Create 20 concurrent updates
-            const updatePromises = Array.from({ length: 20 }, (_, i) =>
+            const updatePromises = Array.from({ length: 20 }, (_, _i) =>
                 manager.update(
                     state => ({ value: state.value + 1 }),
                     Math.random() * 5
                 )
             );
 
-            const results = await Promise.all(updatePromises);
+            const _results = await Promise.all(updatePromises);
 
             // Final value should reflect all updates
             expect(manager.getState().value).toBe(20);
@@ -161,7 +161,7 @@ describe('ApiSessionClient concurrent state update patterns', () => {
             const manager = new ConcurrentStateManager<Metadata>({ items: [] }, 0);
 
             // Concurrent updates that modify the same array
-            const updates = await Promise.all([
+            const _updates = await Promise.all([
                 manager.update(state => ({ items: [...state.items, 'a'] })),
                 manager.update(state => ({ items: [...state.items, 'b'] })),
                 manager.update(state => ({ items: [...state.items, 'c'] })),
@@ -350,7 +350,7 @@ describe('ApiSessionClient concurrent state update patterns', () => {
         });
 
         it('should release lock when async operation fails', async () => {
-            type State = { value: number };
+            type _State = { value: number };
             const lock = new AsyncLock();
             let counter = 0;
 

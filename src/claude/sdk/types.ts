@@ -3,8 +3,6 @@
  * Provides type-safe interfaces for all SDK communication
  */
 
-import type { Readable } from 'node:stream'
-
 /**
  * SDK message types
  */

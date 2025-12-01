@@ -26,7 +26,7 @@ async function generateReleaseNotes() {
                 `git log ${commitRange} --pretty=format:"%h - %s (%an, %ar)" --no-merges`,
                 { encoding: 'utf8' }
             );
-        } catch (error) {
+        } catch (_error) {
             // Fallback to recent commits if tag doesn't exist
             console.error(`Tag ${fromTag} not found, using recent commits instead`);
             gitLog = execSync(

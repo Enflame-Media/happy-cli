@@ -4,13 +4,19 @@
  */
 
 import { timingSafeEqual } from 'crypto';
-import fastify, { FastifyInstance } from 'fastify';
+import fastify from 'fastify';
 import { z } from 'zod';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { logger } from '@/ui/logger';
 import { Metadata } from '@/api/types';
-import { TrackedSession } from './types';
+import { TrackedSession, RateLimitConfig, RateLimiterState, RateLimitMetrics } from './types';
 import { SpawnSessionOptions, SpawnSessionResult } from '@/modules/common/registerCommonHandlers';
+
+/** Default rate limit configuration */
+const DEFAULT_RATE_LIMIT: RateLimitConfig = {
+  maxRequests: 100,
+  windowMs: 60000 // 1 minute
+};
 
 export function startDaemonControlServer({
   getChildren,
@@ -19,7 +25,8 @@ export function startDaemonControlServer({
   requestShutdown,
   onHappySessionWebhook,
   authToken,
-  startTime
+  startTime,
+  rateLimit = DEFAULT_RATE_LIMIT
 }: {
   getChildren: () => TrackedSession[];
   stopSession: (sessionId: string) => boolean;
@@ -28,10 +35,78 @@ export function startDaemonControlServer({
   onHappySessionWebhook: (sessionId: string, metadata: Metadata) => void;
   authToken: string;
   startTime: number;
+  rateLimit?: RateLimitConfig;
 }): Promise<{ port: number; stop: () => Promise<void> }> {
   return new Promise((resolve, reject) => {
     const app = fastify({
       logger: false // We use our own logger
+    });
+
+    // Rate limiter state - sliding window algorithm
+    const rateLimiterState: RateLimiterState = {
+      count: 0,
+      windowStart: Date.now()
+    };
+
+    // Rate limit metrics
+    const rateLimitMetrics: RateLimitMetrics = {
+      totalRequests: 0,
+      rateLimitedRequests: 0,
+      windowResets: 0
+    };
+
+    /**
+     * Check if request should be rate limited.
+     * Uses sliding window algorithm: resets counter when window expires.
+     * @returns Object with allowed status and reset info
+     */
+    function checkRateLimit(): { allowed: boolean; remaining: number; resetAt: number } {
+      const now = Date.now();
+      rateLimitMetrics.totalRequests++;
+
+      // Check if window has expired
+      if (now > rateLimiterState.windowStart + rateLimit.windowMs) {
+        rateLimiterState.count = 0;
+        rateLimiterState.windowStart = now;
+        rateLimitMetrics.windowResets++;
+      }
+
+      const resetAt = rateLimiterState.windowStart + rateLimit.windowMs;
+      const remaining = Math.max(0, rateLimit.maxRequests - rateLimiterState.count - 1);
+
+      // Check if over limit
+      if (rateLimiterState.count >= rateLimit.maxRequests) {
+        rateLimitMetrics.rateLimitedRequests++;
+        return { allowed: false, remaining: 0, resetAt };
+      }
+
+      // Increment counter and allow request
+      rateLimiterState.count++;
+      return { allowed: true, remaining, resetAt };
+    }
+
+    // Rate limiting middleware - applied before authentication to prevent DoS
+    app.addHook('preHandler', async (request, reply) => {
+      const { allowed, remaining, resetAt } = checkRateLimit();
+
+      // Always set rate limit headers
+      const retryAfterSeconds = Math.ceil((resetAt - Date.now()) / 1000);
+      reply.header('X-RateLimit-Limit', rateLimit.maxRequests);
+      reply.header('X-RateLimit-Remaining', remaining);
+      reply.header('X-RateLimit-Reset', Math.ceil(resetAt / 1000));
+
+      if (!allowed) {
+        logger.debug(`[CONTROL SERVER] Rate limit exceeded - requests: ${rateLimitMetrics.totalRequests}, limited: ${rateLimitMetrics.rateLimitedRequests}`);
+        reply.header('Retry-After', retryAfterSeconds);
+        reply.code(429).send({
+          error: 'Rate limit exceeded',
+          retryAfter: retryAfterSeconds,
+          limit: rateLimit.maxRequests,
+          remaining: 0,
+          resetAt: new Date(resetAt).toISOString()
+        });
+        return;
+      }
     });
 
     // Authentication middleware - all requests require valid token
@@ -232,6 +307,22 @@ export function startDaemonControlServer({
               heapTotal: z.number(),
               external: z.number()
             }),
+            rateLimit: z.object({
+              config: z.object({
+                maxRequests: z.number(),
+                windowMs: z.number()
+              }),
+              metrics: z.object({
+                totalRequests: z.number(),
+                rateLimitedRequests: z.number(),
+                windowResets: z.number()
+              }),
+              current: z.object({
+                requestsInWindow: z.number(),
+                remaining: z.number(),
+                windowResetAt: z.string()
+              })
+            }),
             timestamp: z.string()
           })
         }
@@ -251,7 +342,11 @@ export function startDaemonControlServer({
         status = 'degraded';
       }
 
-      logger.debug(`[CONTROL SERVER] Health check: status=${status}, sessions=${children.length}`);
+      // Calculate current rate limit state
+      const windowResetAt = rateLimiterState.windowStart + rateLimit.windowMs;
+      const remaining = Math.max(0, rateLimit.maxRequests - rateLimiterState.count);
+
+      logger.debug(`[CONTROL SERVER] Health check: status=${status}, sessions=${children.length}, rateLimit=${rateLimitMetrics.rateLimitedRequests}/${rateLimitMetrics.totalRequests}`);
 
       return {
         status,
@@ -262,6 +357,22 @@ export function startDaemonControlServer({
           heapUsed: memoryUsage.heapUsed,
           heapTotal: memoryUsage.heapTotal,
           external: memoryUsage.external
+        },
+        rateLimit: {
+          config: {
+            maxRequests: rateLimit.maxRequests,
+            windowMs: rateLimit.windowMs
+          },
+          metrics: {
+            totalRequests: rateLimitMetrics.totalRequests,
+            rateLimitedRequests: rateLimitMetrics.rateLimitedRequests,
+            windowResets: rateLimitMetrics.windowResets
+          },
+          current: {
+            requestsInWindow: rateLimiterState.count,
+            remaining,
+            windowResetAt: new Date(windowResetAt).toISOString()
+          }
         },
         timestamp: new Date().toISOString()
       };

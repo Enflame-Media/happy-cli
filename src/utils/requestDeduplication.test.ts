@@ -65,7 +65,7 @@ describe('Request Deduplication', () => {
       const promise = dedup.request('key1', mockFn);
       expect(dedup.pendingCount()).toBe(1);
 
-      await expect(promise).rejects.toThrow('Request failed');
+      await expect(promise).rejects.toThrow(/Request failed/);
       expect(dedup.pendingCount()).toBe(0);
     });
 
@@ -83,7 +83,7 @@ describe('Request Deduplication', () => {
       expect(mockFn).toHaveBeenCalledTimes(1);
 
       for (const promise of promises) {
-        await expect(promise).rejects.toThrow('Network error');
+        await expect(promise).rejects.toThrow(/Network error/);
       }
     });
 
@@ -349,7 +349,7 @@ describe('Request Deduplication', () => {
       const dedup = createDeduplicator<number>();
       const neverResolves = () => new Promise<number>(() => {});
 
-      const promise = dedup.request('stuck', neverResolves);
+      const _promise = dedup.request('stuck', neverResolves);
       expect(dedup.pendingCount()).toBe(1);
 
       // Promise will never resolve, but shouldn't crash
@@ -465,8 +465,8 @@ describe('Request Deduplication', () => {
       });
 
       // First two attempts fail
-      await expect(dedup.request('api-call', unreliableApi)).rejects.toThrow();
-      await expect(dedup.request('api-call', unreliableApi)).rejects.toThrow();
+      await expect(dedup.request('api-call', unreliableApi)).rejects.toThrow('Network error');
+      await expect(dedup.request('api-call', unreliableApi)).rejects.toThrow('Network error');
 
       // Third attempt succeeds
       const result = await dedup.request('api-call', unreliableApi);

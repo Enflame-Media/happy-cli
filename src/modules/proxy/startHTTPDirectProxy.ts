@@ -26,7 +26,7 @@ export async function startHTTPDirectProxy(options: HTTPProxyOptions): Promise<H
         secure: false
     });
 
-    let requestId = 0;
+    let _requestId = 0;
 
     // Handle proxy errors
     proxy.on('error', (err, req, res) => {
@@ -38,7 +38,7 @@ export async function startHTTPDirectProxy(options: HTTPProxyOptions): Promise<H
     });
 
     // Trace outgoing proxy requests
-    proxy.on('proxyReq', (proxyReq, req, res) => {
+    proxy.on('proxyReq', (proxyReq, req, _res) => {
         // const id = ++requestId;
         // (req as any)._proxyRequestId = id;
         
@@ -55,7 +55,7 @@ export async function startHTTPDirectProxy(options: HTTPProxyOptions): Promise<H
     });
 
     // Trace proxy responses
-    proxy.on('proxyRes', (proxyRes, req, res) => {
+    proxy.on('proxyRes', (proxyRes, req, _res) => {
         // const id = (req as any)._proxyRequestId || 0;
         
         // logger.debug(`[HTTPProxy] [${id}] <-- ${proxyRes.statusCode} ${proxyRes.statusMessage} for ${req.method} ${req.url}`);

@@ -393,7 +393,7 @@ describe('encryption', () => {
 
         // Create data encrypted with version 1 key (now pruned)
         // We need to manually create this since manager no longer has version 1
-        const fakeBundle = new Uint8Array([0x01, 0x00, 0x01, ...new Array(30).fill(0)]);
+        const fakeBundle = new Uint8Array([0x01, 0x00, 0x01, ...Array.from({ length: 30 }, () => 0)]);
 
         const decrypted = manager.decrypt(fakeBundle);
         expect(decrypted).toBeNull();

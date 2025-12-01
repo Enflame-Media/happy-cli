@@ -5,7 +5,7 @@
  * filtering out sensitive field values from error output.
  */
 
-import { ZodError, ZodIssue, ZodSchema, z } from 'zod'
+import { ZodError, ZodIssue, ZodSchema } from 'zod'
 import { AppError, ErrorCodes } from '@/utils/errors'
 
 /**

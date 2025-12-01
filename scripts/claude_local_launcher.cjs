@@ -8,7 +8,7 @@ process.env.DISABLE_AUTOUPDATER = '1';
 function writeMessage(message) {
     try {
         fs.writeSync(3, JSON.stringify(message) + '\n');
-    } catch (err) {
+    } catch (_err) {
         // fd 3 not available, ignore
     }
 }
@@ -56,7 +56,7 @@ global.fetch = function(...args) {
         const urlObj = new URL(url, 'http://localhost');
         hostname = urlObj.hostname;
         path = urlObj.pathname;
-    } catch (e) {
+    } catch (_e) {
         // If URL parsing fails, use defaults
         hostname = 'unknown';
         path = url;

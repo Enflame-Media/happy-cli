@@ -13,6 +13,27 @@ import { join, basename, dirname } from 'node:path'
 import { readDaemonState } from '@/persistence'
 
 /**
+ * Configure chalk color output for non-interactive environments.
+ *
+ * Chalk v5+ already handles:
+ * - NO_COLOR env var: disables colors when set (any value)
+ * - FORCE_COLOR env var: forces colors when set (0-3 for levels)
+ * - TTY detection: disables colors when stdout is not a TTY (piped output)
+ *
+ * We additionally handle:
+ * - CI env var: disables colors in CI environments unless FORCE_COLOR is set
+ *
+ * Priority order (highest first):
+ * 1. FORCE_COLOR - explicitly enables colors (overrides everything)
+ * 2. NO_COLOR - explicitly disables colors (chalk handles this)
+ * 3. CI - disables colors in CI environments
+ * 4. TTY detection - chalk's default behavior
+ */
+if (process.env.CI && !process.env.FORCE_COLOR) {
+  chalk.level = 0
+}
+
+/**
  * Log rotation configuration
  * - MAX_LOG_SIZE: Rotate when file exceeds this size (default 10MB)
  * - MAX_LOG_FILES: Keep this many rotated files before deleting (default 5)
@@ -57,6 +78,84 @@ function getSessionLogPath(): string {
   const timestamp = createTimestampForFilename()
   const filename = configuration.isDaemonProcess ? `${timestamp}-daemon.log` : `${timestamp}.log`
   return join(configuration.logsDir, filename)
+}
+
+/**
+ * Default list of sensitive key patterns to redact from logs.
+ * Keys containing any of these substrings (case-insensitive) will be redacted.
+ */
+const DEFAULT_SENSITIVE_KEYS = [
+  'key',
+  'secret',
+  'token',
+  'password',
+  'auth',
+  'credential',
+  'private',
+  'apikey',
+  'accesstoken',
+  'refreshtoken',
+]
+
+/**
+ * Gets the list of sensitive key patterns to redact.
+ * Can be overridden via HAPPY_SENSITIVE_LOG_KEYS environment variable (comma-separated).
+ */
+function getSensitiveKeys(): string[] {
+  const envKeys = process.env.HAPPY_SENSITIVE_LOG_KEYS
+  if (envKeys) {
+    return envKeys.split(',').map(k => k.trim().toLowerCase())
+  }
+  return DEFAULT_SENSITIVE_KEYS
+}
+
+/**
+ * Sanitizes data for logging by redacting sensitive fields.
+ * Recursively processes objects and arrays, replacing values of sensitive keys with '[REDACTED]'.
+ * Handles circular references safely.
+ *
+ * @param data - The data to sanitize (can be any type)
+ * @param seen - WeakSet to track circular references (internal use)
+ * @returns Sanitized copy of the data with sensitive fields redacted
+ */
+export function sanitizeForLogging(data: unknown, seen = new WeakSet<object>()): unknown {
+  // Primitives pass through unchanged
+  if (data === null || data === undefined) return data
+  if (typeof data !== 'object') return data
+
+  // Handle circular references
+  if (seen.has(data as object)) return '[Circular]'
+  seen.add(data as object)
+
+  // Arrays - sanitize each element
+  if (Array.isArray(data)) {
+    return data.map(item => sanitizeForLogging(item, seen))
+  }
+
+  // Date objects - return as-is
+  if (data instanceof Date) return data
+
+  // Error objects - extract safe properties
+  if (data instanceof Error) {
+    return { message: data.message, name: data.name, stack: data.stack }
+  }
+
+  // Plain objects - check each key against sensitive patterns
+  const sanitized: Record<string, unknown> = {}
+  const sensitiveKeys = getSensitiveKeys()
+
+  for (const [key, value] of Object.entries(data)) {
+    const keyLower = key.toLowerCase()
+    // Redact if the key contains any sensitive pattern (substring matching)
+    const isSensitive = sensitiveKeys.some(sensitiveKey => keyLower.includes(sensitiveKey))
+    if (isSensitive) {
+      sanitized[key] = '[REDACTED]'
+    } else {
+      sanitized[key] = sanitizeForLogging(value, seen)
+    }
+  }
+
+  return sanitized
 }
 
 class Logger {
@@ -324,7 +423,9 @@ class Logger {
       return obj
     }
 
-    const truncatedObject = truncateStrings(object)
+    // Sanitize sensitive data first, then truncate for size
+    const sanitizedObject = sanitizeForLogging(object)
+    const truncatedObject = truncateStrings(sanitizedObject)
     const json = JSON.stringify(truncatedObject, null, 2)
     this.logToFile(`[${this.localTimezoneTimestamp()}]`, message, '\n', json)
   }
@@ -458,14 +559,14 @@ class Logger {
         body: JSON.stringify({
           timestamp: new Date().toISOString(),
           level,
-          message: `${message} ${args.map(a => 
-            typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a)
+          message: `${message} ${args.map(a =>
+            typeof a === 'object' ? JSON.stringify(sanitizeForLogging(a), null, 2) : String(a)
           ).join(' ')}`,
           source: 'cli',
           platform: process.platform
         })
       })
-    } catch (error) {
+    } catch {
       // Silently fail to avoid disrupting the session
     }
   }
@@ -494,7 +595,7 @@ class Logger {
     }
 
     const logLine = `${prefix} ${message} ${args.map(arg =>
-      typeof arg === 'string' ? arg : JSON.stringify(arg)
+      typeof arg === 'string' ? arg : JSON.stringify(sanitizeForLogging(arg))
     ).join(' ')}\n`
 
     // Send to remote server if configured

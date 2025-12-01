@@ -1,6 +1,19 @@
 import { describe, it, expect } from 'vitest'
-import axios, { AxiosError } from 'axios'
+import { AxiosError } from 'axios'
 import { AppError, ErrorCodes, getSafeErrorMessage, type ErrorCode } from './errors'
+
+/** Helper to capture thrown errors for testing - avoids no-conditional-expect lint warnings */
+function getError<T extends Error>(fn: () => unknown): T {
+  try {
+    fn();
+    throw new Error('Expected function to throw but it did not');
+  } catch (e) {
+    if (e instanceof Error && e.message === 'Expected function to throw but it did not') {
+      throw e;
+    }
+    return e as T;
+  }
+}
 
 describe('ErrorCodes', () => {
   it('should have all expected error code categories', () => {
@@ -51,7 +64,7 @@ describe('ErrorCodes', () => {
     const validCode: ErrorCode = ErrorCodes.AUTH_FAILED
 
     // @ts-expect-error - Invalid error code should not be assignable
-    const invalidCode: ErrorCode = 'INVALID_CODE'
+    const _invalidCode: ErrorCode = 'INVALID_CODE'
 
     expect(validCode).toBe('AUTH_FAILED')
   })
@@ -262,10 +275,9 @@ describe('AppError', () => {
     it('should provide type narrowing', () => {
       const error: unknown = new AppError(ErrorCodes.AUTH_FAILED, 'Auth failed')
 
-      if (AppError.isAppError(error)) {
-        // TypeScript should know error is AppError here
-        expect(error.code).toBe(ErrorCodes.AUTH_FAILED)
-      }
+      // Use type assertion instead of conditional to avoid no-conditional-expect
+      expect(AppError.isAppError(error)).toBe(true)
+      expect((error as AppError).code).toBe(ErrorCodes.AUTH_FAILED)
     })
   })
 })
@@ -345,14 +357,12 @@ describe('Error handling patterns', () => {
   })
 
   it('should work in try-catch blocks', () => {
-    try {
+    const error = getError<AppError>(() => {
       throw new AppError(ErrorCodes.VALIDATION_FAILED, 'Validation failed')
-    } catch (error) {
-      expect(AppError.isAppError(error)).toBe(true)
-      if (AppError.isAppError(error)) {
-        expect(error.code).toBe(ErrorCodes.VALIDATION_FAILED)
-      }
-    }
+    });
+    expect(AppError.isAppError(error)).toBe(true)
+    // Use type assertion instead of conditional to avoid no-conditional-expect
+    expect(error.code).toBe(ErrorCodes.VALIDATION_FAILED)
   })
 
   it('should support wrapping unknown errors', () => {
@@ -360,13 +370,10 @@ describe('Error handling patterns', () => {
       throw 'string error'
     }
 
-    try {
-      riskyOperation()
-    } catch (error) {
-      const appError = AppError.fromUnknown(ErrorCodes.OPERATION_FAILED, 'Operation failed', error)
-      expect(appError.code).toBe(ErrorCodes.OPERATION_FAILED)
-      expect(appError.cause).toBeUndefined()
-    }
+    const error = getError(() => riskyOperation());
+    const appError = AppError.fromUnknown(ErrorCodes.OPERATION_FAILED, 'Operation failed', error)
+    expect(appError.code).toBe(ErrorCodes.OPERATION_FAILED)
+    expect(appError.cause).toBeUndefined()
   })
 
   it('should maintain type safety across error boundaries', () => {

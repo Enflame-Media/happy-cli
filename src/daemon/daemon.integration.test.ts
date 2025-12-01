@@ -16,7 +16,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execSync, spawn } from 'child_process';
-import { existsSync, unlinkSync, readFileSync, writeFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import path, { join } from 'path';
 import { configuration } from '@/configuration';
 import {
@@ -218,7 +218,7 @@ describe.skipIf(!await isServerHealthy())('Daemon Integration Tests', { timeout:
 
     // Stop all sessions
     const stopResults = await Promise.all(sessionIds.map(sessionId => stopDaemonSession(sessionId)));
-    expect(stopResults.every(r => r.success && r.data.success), 'Not all sessions reported stopped').toBe(true);
+    expect(stopResults.every(r => r.success && r.data.success)).toBe(true);
 
     // Verify all sessions are stopped
     const emptyListResult = await listDaemonSessions();
@@ -483,7 +483,7 @@ describe.skipIf(!await isServerHealthy())('Daemon Integration Tests', { timeout:
     const originalVersion = originalPackage.version;
     const testVersion = `0.0.0-integration-test-should-be-auto-cleaned-up-${Math.floor(Math.random() * 100000).toString().padStart(5, '0')}`;
 
-    expect(originalVersion, 'Your current cli version was not cleaned up from previous test it seems').not.toBe(testVersion);
+    expect(originalVersion).not.toBe(testVersion);
     
     // Modify package.json version
     const modifiedPackage = { ...originalPackage, version: testVersion };
@@ -619,18 +619,17 @@ describe.skipIf(!await isServerHealthy())('Daemon Lock Race Condition Tests (HAP
 
       // Verify state integrity
       const stateCheck = await verifyDaemonStateIntegrity();
-      expect(stateCheck.valid, `Cycle ${cycle + 1}: ${stateCheck.error}`).toBe(true);
+      expect(stateCheck.valid).toBe(true);
 
       // Verify this is a new PID (not reusing old one)
-      if (stateCheck.pid) {
-        expect(previousPids.includes(stateCheck.pid),
-          `Cycle ${cycle + 1}: PID ${stateCheck.pid} was already used`).toBe(false);
-        previousPids.push(stateCheck.pid);
-      }
+      // Use assertion outside conditional to avoid no-conditional-expect
+      expect(stateCheck.pid).toBeDefined();
+      expect(previousPids.includes(stateCheck.pid!)).toBe(false);
+      previousPids.push(stateCheck.pid!);
 
       // Verify only one daemon is running
       const runningCount = await countRunningDaemons();
-      expect(runningCount, `Cycle ${cycle + 1}: Expected 1 daemon, found ${runningCount}`).toBe(1);
+      expect(runningCount).toBe(1);
 
       console.log(`[TEST] Cycle ${cycle + 1}/${CYCLE_COUNT}: Stopping daemon (PID: ${stateCheck.pid})...`);
 
@@ -676,16 +675,16 @@ describe.skipIf(!await isServerHealthy())('Daemon Lock Race Condition Tests (HAP
 
     // Verify state integrity
     const stateCheck = await verifyDaemonStateIntegrity();
-    expect(stateCheck.valid, `State invalid: ${stateCheck.error}`).toBe(true);
+    expect(stateCheck.valid).toBe(true);
 
     // The critical check: only ONE daemon should be running
     const runningCount = await countRunningDaemons();
-    expect(runningCount, `Expected exactly 1 daemon, found ${runningCount}`).toBe(1);
+    expect(runningCount).toBe(1);
 
     // Verify the running daemon matches the state file
     const state = await readDaemonState();
     expect(state).not.toBeNull();
-    expect(isProcessRunning(state!.pid), 'State file PID should be running').toBe(true);
+    expect(isProcessRunning(state!.pid)).toBe(true);
 
     console.log(`[TEST] Parallel start test passed: Only daemon PID ${state!.pid} is running`);
   });
@@ -718,7 +717,7 @@ describe.skipIf(!await isServerHealthy())('Daemon Lock Race Condition Tests (HAP
     console.log(`[TEST] Initial daemon running with PID ${crashedPid}`);
 
     // Verify lock file exists
-    expect(existsSync(configuration.daemonLockFile), 'Lock file should exist').toBe(true);
+    expect(existsSync(configuration.daemonLockFile)).toBe(true);
 
     // SIGKILL the daemon - this simulates a crash with no cleanup
     console.log(`[TEST] Sending SIGKILL to daemon PID ${crashedPid}...`);
@@ -726,7 +725,7 @@ describe.skipIf(!await isServerHealthy())('Daemon Lock Race Condition Tests (HAP
 
     // Wait for process to die
     await waitFor(async () => !isProcessRunning(crashedPid), 2000, 100);
-    expect(isProcessRunning(crashedPid), 'Crashed daemon should be dead').toBe(false);
+    expect(isProcessRunning(crashedPid)).toBe(false);
 
     // Lock file should still exist (no cleanup on SIGKILL)
     // Note: The lock file might be cleaned up by the OS releasing the file handle
@@ -746,12 +745,12 @@ describe.skipIf(!await isServerHealthy())('Daemon Lock Race Condition Tests (HAP
     // Verify new daemon took over
     const newState = await readDaemonState();
     expect(newState).not.toBeNull();
-    expect(newState!.pid, 'New daemon should have different PID').not.toBe(crashedPid);
-    expect(isProcessRunning(newState!.pid), 'New daemon should be running').toBe(true);
+    expect(newState!.pid).not.toBe(crashedPid);
+    expect(isProcessRunning(newState!.pid)).toBe(true);
 
     // Verify state integrity
     const stateCheck = await verifyDaemonStateIntegrity();
-    expect(stateCheck.valid, `State invalid after recovery: ${stateCheck.error}`).toBe(true);
+    expect(stateCheck.valid).toBe(true);
 
     console.log(`[TEST] Successfully recovered: New daemon PID ${newState!.pid} replaced crashed PID ${crashedPid}`);
   });
@@ -781,7 +780,7 @@ describe.skipIf(!await isServerHealthy())('Daemon Lock Race Condition Tests (HAP
       const pid = state!.pid;
 
       // Verify it's running
-      expect(isProcessRunning(pid), `Cycle ${cycle + 1}: Daemon should be running`).toBe(true);
+      expect(isProcessRunning(pid)).toBe(true);
 
       // Crash it
       process.kill(pid, 'SIGKILL');
@@ -803,7 +802,7 @@ describe.skipIf(!await isServerHealthy())('Daemon Lock Race Condition Tests (HAP
 
     const finalState = await readDaemonState();
     expect(finalState).not.toBeNull();
-    expect(isProcessRunning(finalState!.pid), 'Final daemon should be running').toBe(true);
+    expect(isProcessRunning(finalState!.pid)).toBe(true);
 
     console.log(`[TEST] All crash cycles completed. Final daemon PID: ${finalState!.pid}`);
   });

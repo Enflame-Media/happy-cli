@@ -2,7 +2,7 @@ import axios from 'axios';
 import { encodeBase64, encodeBase64Url, authChallenge } from './encryption';
 import { configuration } from '@/configuration';
 import { logger } from '@/ui/logger';
-import { AppError, ErrorCodes, getSafeErrorMessage } from '@/utils/errors';
+import { AppError, ErrorCodes } from '@/utils/errors';
 
 /**
  * Note: This function is deprecated. Use readPrivateKey/writePrivateKey from persistence module instead.

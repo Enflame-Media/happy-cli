@@ -25,7 +25,6 @@ import { trimIdent } from "@/utils/trimIdent";
 import { validateCodexModel, SUPPORTED_CODEX_MODELS, type CodexSessionConfig } from './types';
 import { notifyDaemonSessionStarted } from "@/daemon/controlClient";
 import { registerKillSessionHandler } from "@/claude/registerKillSessionHandler";
-import { delay } from "@/utils/time";
 import { stopCaffeinate } from "@/utils/caffeinate";
 import { isValidSessionId } from "@/claude/utils/sessionValidation";
 import { SocketDisconnectedError } from "@/api/socketUtils";
@@ -370,7 +369,7 @@ export async function runCodex(opts: {
     };
 
     // Register abort handler
-    session.rpcHandlerManager.registerHandler('abort', async (params, signal) => handleAbort());
+    session.rpcHandlerManager.registerHandler('abort', async (_params, _signal) => handleAbort());
 
     registerKillSessionHandler(session.rpcHandlerManager, handleKillSession);
 
@@ -563,7 +562,7 @@ export async function runCodex(opts: {
             });
         }
         if (msg.type === 'exec_command_begin' || msg.type === 'exec_approval_request') {
-            let { call_id, type, ...inputs } = msg;
+            let { call_id, type: _type, ...inputs } = msg;
             safeSendCodexMessage({
                 type: 'tool-call',
                 name: 'CodexBash',
@@ -573,7 +572,7 @@ export async function runCodex(opts: {
             });
         }
         if (msg.type === 'exec_command_end') {
-            let { call_id, type, ...output } = msg;
+            let { call_id, type: _type, ...output } = msg;
             safeSendCodexMessage({
                 type: 'tool-call-result',
                 callId: call_id,

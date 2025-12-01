@@ -12,9 +12,7 @@ import { logger } from "@/ui/logger";
 import { SDKToLogConverter } from "./utils/sdkToLogConverter";
 import { PLAN_FAKE_REJECT } from "./sdk/prompts";
 import { EnhancedMode } from "./loop";
-import { RawJSONLines } from "@/claude/types";
 import { OutgoingMessageQueue } from "./utils/OutgoingMessageQueue";
-import { getToolName } from "./utils/getToolName";
 import { SocketDisconnectedError } from "@/api/socketUtils";
 
 /** Debounce interval for ready notifications to prevent notification spam */
@@ -54,7 +52,9 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
             onSwitchToLocal: () => {
                 // Switch to local mode
                 logger.debug('[remote]: Switching to local mode via double space');
-                doSwitch();
+                doSwitch().catch((error) => {
+                    logger.debug('[remote]: doSwitch error', error);
+                });
             }
         }), {
             exitOnCtrlC: false,
@@ -110,7 +110,9 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
 
     // Set up callback to release delayed messages when permission is requested
     permissionHandler.setOnPermissionRequest((toolCallId: string) => {
-        messageQueue.releaseToolCall(toolCallId);
+        messageQueue.releaseToolCall(toolCallId).catch((error) => {
+            logger.debug('[remote]: Failed to release tool call', error);
+        });
     });
 
     // Create SDK to Log converter (pass responses from permissions)
@@ -166,7 +168,9 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                         ongoingToolCalls.delete(c.tool_use_id);
 
                         // When tool result received, release any delayed messages for this tool call
-                        messageQueue.releaseToolCall(c.tool_use_id);
+                        messageQueue.releaseToolCall(c.tool_use_id).catch((error) => {
+                            logger.debug('[remote]: Failed to release tool call', error);
+                        });
                     }
                 }
             }
@@ -333,7 +337,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
             let modeHash: string | null = null;
             let mode: EnhancedMode | null = null;
             try {
-                const remoteResult = await claudeRemote({
+                const _remoteResult = await claudeRemote({
                     sessionId: session.sessionId,
                     path: session.path,
                     allowedTools: session.allowedTools ?? [],
@@ -469,7 +473,9 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                             if (error instanceof SocketDisconnectedError) {
                                 logger.warn('[remote] Socket disconnected - cannot send interrupted tool result');
                             } else {
-                                throw error;
+                                // Log unexpected errors in finally block instead of re-throwing
+                                // to avoid masking the original error from try/catch
+                                logger.warn('[remote] Unexpected error sending interrupted tool result:', error);
                             }
                         }
                     }

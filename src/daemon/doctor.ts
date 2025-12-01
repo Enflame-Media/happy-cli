@@ -16,18 +16,18 @@ export async function findAllHappyProcesses(): Promise<Array<{ pid: number, comm
   try {
     const processes = await psList();
     const allProcesses: Array<{ pid: number, command: string, type: string }> = [];
-    
+
     for (const proc of processes) {
       const cmd = proc.cmd || '';
       const name = proc.name || '';
-      
+
       // Check if it's a Happy process
-      const isHappy = name.includes('happy') || 
+      const isHappy = name.includes('happy') ||
                       name === 'node' && (cmd.includes('happy-cli') || cmd.includes('dist/index.mjs')) ||
                       cmd.includes('happy.mjs') ||
                       cmd.includes('happy-coder') ||
                       (cmd.includes('tsx') && cmd.includes('src/index.ts') && cmd.includes('happy-cli'));
-      
+
       if (!isHappy) continue;
 
       // Classify process type
@@ -52,7 +52,7 @@ export async function findAllHappyProcesses(): Promise<Array<{ pid: number, comm
     }
 
     return allProcesses;
-  } catch (error) {
+  } catch {
     return [];
   }
 }

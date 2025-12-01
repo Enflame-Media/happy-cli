@@ -6,7 +6,7 @@
 
 import { FileHandle } from 'node:fs/promises'
 import { readFile, writeFile, mkdir, open, unlink, rename, stat } from 'node:fs/promises'
-import { existsSync, writeFileSync, readFileSync, unlinkSync, statSync, renameSync, mkdirSync } from 'node:fs'
+import { existsSync, writeFileSync, readFileSync, unlinkSync, statSync, renameSync } from 'node:fs'
 import { constants } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { configuration } from '@/configuration'

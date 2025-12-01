@@ -9,10 +9,9 @@ import chalk from 'chalk'
 import { configuration } from '@/configuration'
 import { readSettings, readCredentials } from '@/persistence'
 import { checkIfDaemonRunningAndCleanupStaleState } from '@/daemon/controlClient'
-import { findRunawayHappyProcesses, findAllHappyProcesses } from '@/daemon/doctor'
+import { findAllHappyProcesses } from '@/daemon/doctor'
 import { readDaemonState } from '@/persistence'
 import { existsSync, readdirSync, statSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { projectPath } from '@/projectPath'
 import packageJson from '../../package.json'
@@ -175,7 +174,7 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
             const settings = await readSettings();
             console.log(chalk.bold('\n📄 Settings (settings.json):'));
             console.log(chalk.gray(JSON.stringify(settings, null, 2)));
-        } catch (error) {
+        } catch {
             console.log(chalk.bold('\n📄 Settings:'));
             console.log(chalk.red('❌ Failed to read settings'));
         }
@@ -189,7 +188,7 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
             } else {
                 console.log(chalk.yellow('⚠️  Not authenticated (no credentials)'));
             }
-        } catch (error) {
+        } catch {
             console.log(chalk.red('❌ Error reading credentials'));
         }
     }
@@ -266,7 +265,7 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
             console.log(chalk.bold('\n💡 Process Management'));
             console.log(chalk.gray('To clean up runaway processes: happy doctor clean'));
         }
-    } catch (error) {
+    } catch {
         console.log(chalk.red('❌ Error checking daemon status'));
     }
 

@@ -15,7 +15,7 @@ export function registerKillSessionHandler(
     rpcHandlerManager: RpcHandlerManager,
     killThisHappy: () => Promise<void>
 ) {
-    rpcHandlerManager.registerHandler<KillSessionRequest, KillSessionResponse>('killSession', async (data, signal) => {
+    rpcHandlerManager.registerHandler<KillSessionRequest, KillSessionResponse>('killSession', async (_data, _signal) => {
         logger.debug('Kill session request received');
 
         // This will start the cleanup process

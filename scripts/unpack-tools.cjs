@@ -153,7 +153,7 @@ module.exports = { unpackTools, getPlatformDir, getToolsDir };
 // Run if executed directly
 if (require.main === module) {
     unpackTools()
-        .then(result => {
+        .then(_result => {
             process.exit(0);
         })
         .catch(error => {

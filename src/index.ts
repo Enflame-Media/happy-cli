@@ -31,11 +31,16 @@ import { generateMainHelp, generateCommandHelp } from './commands/registry'
 import { spawnHappyCLI } from './utils/spawnHappyCLI'
 import { claudeCliPath } from './claude/claudeLocal'
 import { execFileSync } from 'node:child_process'
+import { checkForUpdatesAndNotify } from './utils/checkForUpdates'
 
 
 (async () => {
   // Validate environment variables early (logs warnings for unusual configs)
   validateEnv()
+
+  // Non-blocking version check - runs in background without blocking startup
+  // Uses 5-second timeout and silently handles network errors (HAP-134)
+  void checkForUpdatesAndNotify()
 
   const args = process.argv.slice(2)
 
@@ -374,7 +379,7 @@ ${chalk.gray(`Last checked: ${new Date(health.timestamp).toLocaleString()}`)}
       try {
         const claudeHelp = execFileSync(process.execPath, [claudeCliPath, '--help'], { encoding: 'utf8' })
         console.log(claudeHelp)
-      } catch (e) {
+      } catch {
         console.log(chalk.yellow('Could not retrieve claude help. Make sure claude is installed.'))
       }
 
