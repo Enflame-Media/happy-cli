@@ -1,9 +1,10 @@
 /**
  * WebSocket client for machine/daemon communication with Happy server
  * Similar to ApiSessionClient but for machine-scoped connections
+ *
+ * @see HAP-261 - Migrated from Socket.io to native WebSocket
  */
 
-import { io, Socket } from 'socket.io-client';
 import { AppError, ErrorCodes } from '@/utils/errors';
 import { logger } from '@/ui/logger';
 import { configuration } from '@/configuration';
@@ -12,70 +13,12 @@ import { registerCommonHandlers, SpawnSessionOptions, SpawnSessionResult } from 
 import { encodeBase64, decodeBase64, encrypt, decrypt } from './encryption';
 import { backoff } from '@/utils/time';
 import { RpcHandlerManager } from './rpc/RpcHandlerManager';
+import { HappyWebSocket } from './HappyWebSocket';
+import type { MetadataUpdateResponse, DaemonStateUpdateResponse } from './socketUtils';
 
 // Keep-alive timing configuration (prevents thundering herd on reconnection)
 const KEEP_ALIVE_BASE_INTERVAL_MS = 20000; // 20 seconds base interval
 const KEEP_ALIVE_JITTER_MAX_MS = 5000; // 0-5 seconds random jitter
-
-// Socket.io reconnection jitter configuration
-const RECONNECTION_RANDOMIZATION_FACTOR = 0.5; // 0.5 means delay varies ±50%
-
-interface ServerToDaemonEvents {
-    update: (data: Update) => void;
-    'rpc-request': (data: { method: string, params: string }, callback: (response: string) => void) => void;
-    'rpc-registered': (data: { method: string }) => void;
-    'rpc-unregistered': (data: { method: string }) => void;
-    'rpc-error': (data: { type: string, error: string }) => void;
-    auth: (data: { success: boolean, user: string }) => void;
-    error: (data: { message: string }) => void;
-}
-
-interface DaemonToServerEvents {
-    'machine-alive': (data: {
-        machineId: string;
-        time: number;
-    }) => void;
-
-    'machine-update-metadata': (data: {
-        machineId: string;
-        metadata: string; // Encrypted MachineMetadata
-        expectedVersion: number
-    }, cb: (answer: {
-        result: 'error'
-    } | {
-        result: 'version-mismatch'
-        version: number,
-        metadata: string
-    } | {
-        result: 'success',
-        version: number,
-        metadata: string
-    }) => void) => void;
-
-    'machine-update-state': (data: {
-        machineId: string;
-        daemonState: string; // Encrypted DaemonState
-        expectedVersion: number
-    }, cb: (answer: {
-        result: 'error'
-    } | {
-        result: 'version-mismatch'
-        version: number,
-        daemonState: string
-    } | {
-        result: 'success',
-        version: number,
-        daemonState: string
-    }) => void) => void;
-
-    'rpc-register': (data: { method: string }) => void;
-    'rpc-unregister': (data: { method: string }) => void;
-    'rpc-call': (data: { method: string, params: unknown }, callback: (response: {
-        ok: boolean
-        result?: unknown
-        error?: string
-    }) => void) => void;
-}
 
 type MachineRpcHandlers = {
     spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
@@ -84,7 +27,7 @@ type MachineRpcHandlers = {
 }
 
 export class ApiMachineClient {
-    private socket!: Socket<ServerToDaemonEvents, DaemonToServerEvents>;
+    private socket!: HappyWebSocket;
     private keepAliveInterval: NodeJS.Timeout | null = null;
 
     private isShuttingDown = false;
@@ -184,7 +127,7 @@ export class ApiMachineClient {
         await backoff(async () => {
             const updated = handler(this.machine.metadata);
 
-            const answer = await this.socket.emitWithAck('machine-update-metadata', {
+            const answer = await this.socket.emitWithAck<MetadataUpdateResponse>('machine-update-metadata', {
                 machineId: this.machine.id,
                 metadata: encodeBase64(encrypt(this.machine.encryptionKey, this.machine.encryptionVariant, updated)),
                 expectedVersion: this.machine.metadataVersion
@@ -222,7 +165,7 @@ export class ApiMachineClient {
         await backoff(async () => {
             const updated = handler(this.machine.daemonState);
 
-            const answer = await this.socket.emitWithAck('machine-update-state', {
+            const answer = await this.socket.emitWithAck<DaemonStateUpdateResponse>('machine-update-state', {
                 machineId: this.machine.id,
                 daemonState: encodeBase64(encrypt(this.machine.encryptionKey, this.machine.encryptionVariant, updated)),
                 expectedVersion: this.machine.daemonStateVersion
@@ -253,23 +196,31 @@ export class ApiMachineClient {
     }
 
     connect() {
-        const serverUrl = configuration.serverUrl.replace(/^http/, 'ws');
-        logger.debug(`[API MACHINE] Connecting to ${serverUrl}`);
+        logger.debug(`[API MACHINE] Connecting to ${configuration.serverUrl}`);
 
-        this.socket = io(serverUrl, {
-            transports: ['websocket'],
-            auth: {
+        //
+        // Create WebSocket with optimized connection options
+        //
+        // @see HAP-261 - Migrated from Socket.io to native WebSocket
+        //
+
+        this.socket = new HappyWebSocket(
+            configuration.serverUrl,
+            {
                 token: this.token,
-                clientType: 'machine-scoped' as const,
+                clientType: 'machine-scoped',
                 machineId: this.machine.id
             },
-            path: '/v1/updates',
-            reconnection: true,
-            reconnectionDelay: 1000,
-            reconnectionDelayMax: 5000,
-            // Add randomization to prevent thundering herd on reconnection
-            randomizationFactor: RECONNECTION_RANDOMIZATION_FACTOR
-        });
+            {
+                // Reconnection settings
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 5000,
+                randomizationFactor: 0.5, // Add randomization to prevent thundering herd
+                maxReconnectionAttempts: Infinity,
+                timeout: 20000,
+                ackTimeout: 5000
+            }
+        );
 
         this.socket.on('connect', () => {
             logger.debug('[API MACHINE] Connected to server');
@@ -287,7 +238,7 @@ export class ApiMachineClient {
 
 
             // Register all handlers
-            this.rpcHandlerManager.onSocketConnect(this.socket);
+            this.rpcHandlerManager.onWebSocketConnect(this.socket);
 
             // Start keep-alive
             this.startKeepAlive();
@@ -295,18 +246,18 @@ export class ApiMachineClient {
 
         this.socket.on('disconnect', () => {
             logger.debug('[API MACHINE] Disconnected from server');
-            this.rpcHandlerManager.onSocketDisconnect();
+            this.rpcHandlerManager.onWebSocketDisconnect();
             this.stopKeepAlive();
         });
 
         // Single consolidated RPC handler
-        this.socket.on('rpc-request', async (data: { method: string, params: string }, callback: (response: string) => void) => {
+        this.socket.onRpcRequest(async (data: { method: string, params: string }, callback: (response: string) => void) => {
             logger.debugLargeJson(`[API MACHINE] Received RPC request:`, data);
             callback(await this.rpcHandlerManager.handleRequest(data));
         });
 
         // Handle update events from server
-        this.socket.on('update', (data: Update) => {
+        this.socket.on<Update>('update', (data: Update) => {
             const updateType = data.body.t;
 
             // Machine clients should only care about machine updates for this specific machine
@@ -357,12 +308,15 @@ export class ApiMachineClient {
         });
 
         this.socket.on('connect_error', (error) => {
-            logger.debug(`[API MACHINE] Connection error: ${error.message}`);
+            logger.debug(`[API MACHINE] Connection error: ${(error as Error).message}`);
         });
 
-        this.socket.io.on('error', (error: Error) => {
+        this.socket.on('error', (error: Error) => {
             logger.debug('[API MACHINE] Socket error:', error);
         });
+
+        // Connect to server
+        this.socket.connect();
     }
 
     private startKeepAlive() {
@@ -417,17 +371,14 @@ export class ApiMachineClient {
             return;
         }
         this.isShuttingDown = true;
-        
+
         logger.debug('[API MACHINE] Shutting down');
         this.stopKeepAlive();
         if (this.socket) {
             // Remove all socket event listeners before closing
             this.socket.removeAllListeners();
-            // Remove manager-level listeners (e.g., socket.io.on('error'))
-            this.socket.io.removeAllListeners();
             this.socket.close();
             logger.debug('[API MACHINE] Socket closed');
         }
-        // Removed call to this.rpcHandlerManager.clearHandlers() as method may not exist
     }
 }

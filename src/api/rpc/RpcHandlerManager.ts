@@ -2,6 +2,8 @@
  * Generic RPC handler manager for session and machine clients
  * Manages RPC method registration, encryption/decryption, and handler execution
  * Supports request cancellation via AbortController
+ *
+ * @see HAP-261 - Updated to support both Socket.io and native WebSocket
  */
 
 import { logger as defaultLogger } from '@/ui/logger';
@@ -13,8 +15,18 @@ import {
     RpcHandlerConfig,
     RpcCancelRequest,
 } from './types';
-import { Socket } from 'socket.io-client';
 import { AppError, ErrorCodes } from '@/utils/errors';
+import type { HappyWebSocket } from '@/api/HappyWebSocket';
+
+/**
+ * Interface for WebSocket-like objects that support RPC
+ * Allows the manager to work with both Socket.io and native WebSocket
+ */
+interface RpcSocket {
+    emit(event: string, data: unknown): void;
+    on<T = unknown>(event: string, callback: (data: T) => void): unknown;
+    off<T = unknown>(event: string, callback: (data: T) => void): unknown;
+}
 
 export class RpcHandlerManager {
     private handlers: RpcHandlerMap = new Map();
@@ -22,7 +34,7 @@ export class RpcHandlerManager {
     private readonly encryptionKey: Uint8Array;
     private readonly encryptionVariant: 'legacy' | 'dataKey';
     private readonly logger: (message: string, data?: unknown) => void;
-    private socket: Socket | null = null;
+    private socket: RpcSocket | null = null;
 
     // Track pending requests for cancellation support
     private pendingRequests: Map<string, AbortController> = new Map();
@@ -172,8 +184,13 @@ export class RpcHandlerManager {
         this.pendingRequests.clear();
     }
 
-    onSocketConnect(socket: Socket): void {
-        this.socket = socket;
+    /**
+     * Called when native WebSocket connects
+     * @see HAP-261 - New method for native WebSocket support
+     */
+    onWebSocketConnect(socket: HappyWebSocket): void {
+        // Cast to RpcSocket interface - HappyWebSocket implements emit/on/off
+        this.socket = socket as unknown as RpcSocket;
         for (const [prefixedMethod] of this.handlers) {
             socket.emit('rpc-register', { method: prefixedMethod });
         }
@@ -187,13 +204,17 @@ export class RpcHandlerManager {
         }
 
         // Remove existing listener before adding to prevent accumulation on reconnection
-        // This is defensive - onSocketDisconnect should have removed it, but timing issues
-        // with Socket.IO reconnection can cause listener accumulation (MaxListenersExceededWarning)
-        socket.off('rpc-cancel', this.cancelHandler);
-        socket.on('rpc-cancel', this.cancelHandler);
+        // This is defensive - onWebSocketDisconnect should have removed it, but timing issues
+        // can cause listener accumulation
+        socket.off<RpcCancelRequest>('rpc-cancel', this.cancelHandler);
+        socket.on<RpcCancelRequest>('rpc-cancel', this.cancelHandler);
     }
 
-    onSocketDisconnect(): void {
+    /**
+     * Called when native WebSocket disconnects
+     * @see HAP-261 - New method for native WebSocket support
+     */
+    onWebSocketDisconnect(): void {
         // Remove the cancellation listener to prevent memory leaks
         if (this.socket && this.cancelHandler) {
             this.socket.off('rpc-cancel', this.cancelHandler);
@@ -237,9 +258,3 @@ export class RpcHandlerManager {
     }
 }
 
-/**
- * Factory function to create an RPC handler manager
- */
-export function createRpcHandlerManager(config: RpcHandlerConfig): RpcHandlerManager {
-    return new RpcHandlerManager(config);
-}

@@ -1,14 +1,9 @@
 /**
- * Socket.IO utility functions for the Happy CLI
- * Provides timeout wrappers for socket operations
+ * WebSocket utility functions for the Happy CLI
+ * Provides timeout wrappers and error types for WebSocket operations
+ *
+ * @see HAP-261 - Migrated from Socket.io to native WebSocket
  */
-
-import { Socket } from 'socket.io-client';
-
-/**
- * Default timeout for socket acknowledgment in milliseconds
- */
-export const DEFAULT_SOCKET_ACK_TIMEOUT_MS = 5000;
 
 /**
  * Response type for 'update-metadata' and 'machine-update-metadata' events
@@ -56,7 +51,7 @@ export type DaemonStateUpdateResponse = {
 };
 
 /**
- * Error thrown when a socket acknowledgment times out
+ * Error thrown when a WebSocket acknowledgment times out
  */
 export class SocketAckTimeoutError extends Error {
     constructor(event: string, timeoutMs: number) {
@@ -67,7 +62,7 @@ export class SocketAckTimeoutError extends Error {
 
 
 /**
- * Error thrown when attempting to send a message on a disconnected socket.
+ * Error thrown when attempting to send a message on a disconnected WebSocket.
  * Callers should catch this error and handle gracefully (e.g., display
  * "Disconnected from server" message and terminate session cleanly).
  */
@@ -76,48 +71,4 @@ export class SocketDisconnectedError extends Error {
         super(`Socket not connected: cannot ${operation}`);
         this.name = 'SocketDisconnectedError';
     }
-}
-
-/**
- * Wraps Socket.IO's emitWithAck with a configurable timeout.
- *
- * Socket.IO's emitWithAck() waits indefinitely for server acknowledgment.
- * This wrapper adds timeout protection to prevent hanging when the server
- * is unresponsive.
- *
- * @param socket - The Socket.IO client socket instance
- * @param event - The event name to emit
- * @param data - The data payload to send with the event
- * @param timeoutMs - Timeout in milliseconds (default: 5000ms)
- * @returns Promise that resolves with the server's acknowledgment response
- * @throws {SocketAckTimeoutError} If the server doesn't respond within the timeout
- *
- * @example
- * ```typescript
- * const response = await emitWithTimeout(socket, 'update-metadata', { sid: '123', data: 'foo' });
- * // With custom timeout
- * const response = await emitWithTimeout(socket, 'update-state', data, 10000);
- * ```
- */
-export async function emitWithTimeout<T>(
-    socket: Socket,
-    event: string,
-    data: unknown,
-    timeoutMs: number = DEFAULT_SOCKET_ACK_TIMEOUT_MS
-): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-        const timer = setTimeout(() => {
-            reject(new SocketAckTimeoutError(event, timeoutMs));
-        }, timeoutMs);
-
-        socket.emitWithAck(event, data)
-            .then((response: T) => {
-                clearTimeout(timer);
-                resolve(response);
-            })
-            .catch((error: Error) => {
-                clearTimeout(timer);
-                reject(error);
-            });
-    });
 }

@@ -1,8 +1,8 @@
 import { logger } from '@/ui/logger'
 import { AppError, ErrorCodes } from '@/utils/errors'
 import { EventEmitter } from 'node:events'
-import { io, Socket } from 'socket.io-client'
-import { AgentState, ClientToServerEvents, MessageContent, Metadata, ServerToClientEvents, Session, Update, UserMessage, UserMessageSchema, Usage } from './types'
+import { HappyWebSocket } from './HappyWebSocket'
+import { AgentState, MessageContent, Metadata, Session, Update, UserMessage, UserMessageSchema, Usage } from './types'
 import { calculateCost } from './pricing'
 import { decodeBase64, decrypt, encodeBase64, encrypt, JsonSerializable } from './encryption';
 import { backoff } from '@/utils/time';
@@ -14,6 +14,7 @@ import { RpcHandlerManager } from './rpc/RpcHandlerManager';
 import { registerCommonHandlers } from '../modules/common/registerCommonHandlers';
 import { SocketDisconnectedError } from './socketUtils';
 import { extractErrorType, SyncMetrics, SyncMetricsCollector, SyncOutcome } from './syncMetrics';
+import type { MetadataUpdateResponse, StateUpdateResponse } from './socketUtils';
 
 /**
  * Event types emitted by ApiSessionClient
@@ -48,7 +49,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
     private metadataVersion: number;
     private agentState: AgentState | null;
     private agentStateVersion: number;
-    private socket: Socket<ServerToClientEvents, ClientToServerEvents>;
+    private socket: HappyWebSocket;
     private pendingMessages: UserMessage[] = [];
     private pendingMessageCallback: ((message: UserMessage) => void) | null = null;
     readonly rpcHandlerManager: RpcHandlerManager;
@@ -84,51 +85,36 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
         registerCommonHandlers(this.rpcHandlerManager);
 
         //
-        // Create socket with optimized connection options
+        // Create WebSocket with optimized connection options
         //
-        // Socket.IO Configuration Rationale:
-        // - WebSocket-only transport: Preferred for real-time bidirectional session sync.
-        //   Polling fallback would introduce latency that breaks the real-time experience.
+        // WebSocket Configuration Rationale:
+        // - Native WebSocket transport: Compatible with Cloudflare Workers Durable Objects.
         // - Aggressive reconnection: Sessions are long-lived and must survive network hiccups.
         // - Randomization factor: Prevents "thundering herd" when many clients reconnect
         //   simultaneously after server restart.
         // - Extended max delay: For mobile/unstable networks, prevents battery drain from
         //   aggressive reconnection attempts.
-        // - Binary transport (msgpack): Not implemented - would require server-side changes
-        //   and cross-project dependency coordination. Current JSON transport is sufficient
-        //   given that messages are already encrypted (binary overhead minimal).
+        //
+        // @see HAP-261 - Migrated from Socket.io to native WebSocket
         //
 
-        this.socket = io(configuration.serverUrl, {
-            // Authentication - passed on every connection/reconnection
-            auth: {
+        this.socket = new HappyWebSocket(
+            configuration.serverUrl,
+            {
                 token: this.token,
-                clientType: 'session-scoped' as const,
+                clientType: 'session-scoped',
                 sessionId: this.sessionId
             },
-
-            // Server endpoint path
-            path: '/v1/updates',
-
-            // Reconnection settings - tuned for long-lived session connections
-            reconnection: true,              // Enable automatic reconnection
-            reconnectionAttempts: Infinity,  // Never give up - sessions are critical
-            reconnectionDelay: 1000,         // Start with 1 second delay
-            reconnectionDelayMax: 30000,     // Cap at 30 seconds for poor networks
-            randomizationFactor: 0.5,        // Add jitter (0.5-1.5x) to prevent thundering herd
-
-            // Connection timeout - time to wait for initial connection
-            timeout: 20000,                  // 20 seconds - generous for slow networks
-
-            // Transport options - WebSocket only for real-time performance
-            transports: ['websocket'],       // No polling fallback - latency unacceptable
-
-            // Credentials for cross-origin requests
-            withCredentials: true,
-
-            // Manual connection control - we connect after setting up handlers
-            autoConnect: false
-        });
+            {
+                // Reconnection settings - tuned for long-lived session connections
+                reconnectionDelay: 1000,         // Start with 1 second delay
+                reconnectionDelayMax: 30000,     // Cap at 30 seconds for poor networks
+                randomizationFactor: 0.5,        // Add jitter (0.5-1.5x) to prevent thundering herd
+                maxReconnectionAttempts: Infinity,  // Never give up - sessions are critical
+                timeout: 20000,                  // 20 seconds - generous for slow networks
+                ackTimeout: 5000                 // 5 second ack timeout
+            }
+        );
 
         //
         // Handlers
@@ -136,7 +122,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
 
         this.socket.on('connect', () => {
             logger.debug('Socket connected successfully');
-            this.rpcHandlerManager.onSocketConnect(this.socket);
+            this.rpcHandlerManager.onWebSocketConnect(this.socket);
 
             // On reconnection, request state sync to reconcile any changes that occurred during disconnection
             if (this.hasConnectedBefore) {
@@ -157,13 +143,13 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
         })
 
         // Set up global RPC request handler
-        this.socket.on('rpc-request', async (data: { method: string, params: string }, callback: (response: string) => void) => {
+        this.socket.onRpcRequest(async (data: { method: string, params: string }, callback: (response: string) => void) => {
             callback(await this.rpcHandlerManager.handleRequest(data));
         })
 
         this.socket.on('disconnect', (reason) => {
             logger.debug('[API] Socket disconnected:', reason);
-            this.rpcHandlerManager.onSocketDisconnect();
+            this.rpcHandlerManager.onWebSocketDisconnect();
             // Record disconnection for metrics
             this.syncMetricsCollector.recordDisconnect();
             // Notify user of disconnection (only once, avoid spam during reconnection attempts)
@@ -175,13 +161,12 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
 
         this.socket.on('connect_error', (error) => {
             logger.debug('[API] Socket connection error:', error);
-            this.rpcHandlerManager.onSocketDisconnect();
+            this.rpcHandlerManager.onWebSocketDisconnect();
         })
 
         // Server events
-        // Note: async callback is intentional - Socket.IO ignores the returned Promise
-        // but we need async to properly serialize state updates with locks
-        this.socket.on('update', async (data: Update) => {
+        // Note: async callback is intentional - we need async to properly serialize state updates with locks
+        this.socket.on<Update>('update', async (data: Update) => {
             try {
                 logger.debugLargeJson('[SOCKET] [UPDATE] Received update:', data);
 
@@ -483,7 +468,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
         return this.metadataLock.inLock(async () => {
             await backoff(async () => {
                 let updated = handler(this.metadata!); // Weird state if metadata is null - should never happen but here we are
-                const answer = await this.socket.emitWithAck('update-metadata', { sid: this.sessionId, expectedVersion: this.metadataVersion, metadata: encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, updated)) });
+                const answer = await this.socket.emitWithAck<MetadataUpdateResponse>('update-metadata', { sid: this.sessionId, expectedVersion: this.metadataVersion, metadata: encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, updated)) });
                 if (answer.result === 'success') {
                     const decryptedMetadata = decrypt<Metadata>(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.metadata));
                     if (decryptedMetadata === null) {
@@ -519,7 +504,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
         return this.agentStateLock.inLock(async () => {
             await backoff(async () => {
                 let updated = handler(this.agentState || {});
-                const answer = await this.socket.emitWithAck('update-state', { sid: this.sessionId, expectedVersion: this.agentStateVersion, agentState: updated ? encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, updated)) : null });
+                const answer = await this.socket.emitWithAck<StateUpdateResponse>('update-state', { sid: this.sessionId, expectedVersion: this.agentStateVersion, agentState: updated ? encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, updated)) : null });
                 if (answer.result === 'success') {
                     if (answer.agentState) {
                         const decryptedState = decrypt<AgentState>(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.agentState));
@@ -567,12 +552,11 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
             return;
         }
         return new Promise((resolve) => {
-            this.socket.emit('ping', () => {
-                resolve();
-            });
+            // With native WebSocket, we just resolve after a small delay
+            // since there's no explicit buffer tracking like Socket.io
             setTimeout(() => {
                 resolve();
-            }, 10000);
+            }, 100);
         });
     }
 
@@ -639,7 +623,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                     ? encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, currentState))
                     : null;
 
-                const answer = await this.socket.emitWithAck('update-state', {
+                const answer = await this.socket.emitWithAck<StateUpdateResponse>('update-state', {
                     sid: this.sessionId,
                     expectedVersion: this.agentStateVersion,
                     agentState: encryptedState
@@ -711,7 +695,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                     return;
                 }
 
-                const answer = await this.socket.emitWithAck('update-metadata', {
+                const answer = await this.socket.emitWithAck<MetadataUpdateResponse>('update-metadata', {
                     sid: this.sessionId,
                     expectedVersion: this.metadataVersion,
                     metadata: encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, currentMetadata))
