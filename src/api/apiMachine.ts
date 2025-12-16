@@ -381,4 +381,15 @@ export class ApiMachineClient {
             logger.debug('[API MACHINE] Socket closed');
         }
     }
+
+
+    /**
+     * Called during memory pressure to clean up non-essential state. (HAP-353)
+     * Delegates to the underlying socket's memory pressure handler.
+     */
+    onMemoryPressure(): void {
+        if (this.socket && !this.isShuttingDown) {
+            this.socket.onMemoryPressure();
+        }
+    }
 }

@@ -712,6 +712,9 @@ export async function startDaemon(): Promise<void> {
           pidToAwaiter.delete(pid);
         }
       }
+
+      // Clean up WebSocket handlers and stale acks (HAP-353)
+      apiMachine.onMemoryPressure();
     });
 
     // Setup signal handlers

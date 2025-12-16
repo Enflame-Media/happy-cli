@@ -116,6 +116,10 @@ export class HappyWebSocket {
     private connectionReject: ((error: Error) => void) | null = null;
 
     // Event handlers
+    private static readonly MAX_HANDLERS_PER_EVENT = 100;
+    private static readonly HANDLER_WARNING_THRESHOLD = 90;
+
+    // Event handlers with bounded growth (HAP-353)
     private eventHandlers: Map<string, Set<EventCallback>> = new Map();
     private rpcHandler: RpcCallback | null = null;
 
@@ -176,7 +180,7 @@ export class HappyWebSocket {
         const wsUrl = new URL(this.path, this.baseUrl);
         wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
 
-        // Build auth headers for secure transmission (HAP-351)
+        // Build auth headers for secure transmission
         // Server-side parseHandshake() supports Authorization header as fallback
         const headers: Record<string, string> = {
             'Authorization': `Bearer ${this.auth.token}`,
@@ -371,7 +375,21 @@ export class HappyWebSocket {
         if (!this.eventHandlers.has(event)) {
             this.eventHandlers.set(event, new Set());
         }
-        this.eventHandlers.get(event)!.add(callback as EventCallback);
+
+        const handlers = this.eventHandlers.get(event)!;
+
+        // Bounds enforcement: prevent unbounded growth (HAP-353)
+        if (handlers.size >= HappyWebSocket.MAX_HANDLERS_PER_EVENT) {
+            logger.warn(`[HappyWebSocket] Max handlers (${HappyWebSocket.MAX_HANDLERS_PER_EVENT}) reached for event '${event}'. Rejecting new handler.`);
+            return this;
+        }
+
+        // Warning at threshold
+        if (handlers.size === HappyWebSocket.HANDLER_WARNING_THRESHOLD) {
+            logger.warn(`[HappyWebSocket] Handler count approaching limit (${handlers.size}/${HappyWebSocket.MAX_HANDLERS_PER_EVENT}) for event '${event}'`);
+        }
+
+        handlers.add(callback as EventCallback);
         return this;
     }
 
@@ -491,6 +509,55 @@ export class HappyWebSocket {
             pending.reject(error);
         }
         this.pendingAcks.clear();
+    }
+
+    /**
+     * Clean up stale acknowledgement entries that may have orphaned timers.
+     * Called during memory pressure events or periodic maintenance. (HAP-353)
+     *
+     * @returns Number of stale entries removed
+     */
+    cleanupStaleAcks(): number {
+        let cleaned = 0;
+        for (const [ackId, pending] of this.pendingAcks) {
+            // If timer is somehow null/undefined but entry exists, it's orphaned
+            if (!pending.timer) {
+                this.pendingAcks.delete(ackId);
+                cleaned++;
+                logger.debug(`[HappyWebSocket] Cleaned up orphaned ack entry: ${ackId}`);
+            }
+        }
+        if (cleaned > 0) {
+            logger.debug(`[HappyWebSocket] Cleaned up ${cleaned} stale ack entries`);
+        }
+        return cleaned;
+    }
+
+    /**
+     * Get current handler and ack counts for monitoring/diagnostics.
+     * Useful for tracking memory pressure and debugging. (HAP-353)
+     */
+    getStats(): { totalHandlers: number; eventTypes: number; pendingAcks: number } {
+        let totalHandlers = 0;
+        for (const handlers of this.eventHandlers.values()) {
+            totalHandlers += handlers.size;
+        }
+        return {
+            totalHandlers,
+            eventTypes: this.eventHandlers.size,
+            pendingAcks: this.pendingAcks.size
+        };
+    }
+
+    /**
+     * Called during memory pressure to clean up non-essential state. (HAP-353)
+     * Removes orphaned acks and reports stats for diagnostics.
+     */
+    onMemoryPressure(): void {
+        const statsBefore = this.getStats();
+        const acksCleanedUp = this.cleanupStaleAcks();
+
+        logger.debug(`[HappyWebSocket] Memory pressure cleanup: ${acksCleanedUp} acks cleaned. Stats: handlers=${statsBefore.totalHandlers}, events=${statsBefore.eventTypes}, pendingAcks=${statsBefore.pendingAcks}`);
     }
 
     /**
