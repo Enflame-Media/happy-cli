@@ -10,17 +10,15 @@ export type Usage = z.infer<typeof UsageSchema>
 /**
  * Base message content structure for encrypted messages
  */
-export const SessionMessageContentSchema = z.object({
+const SessionMessageContentSchema = z.object({
   c: z.string(), // Base64 encoded encrypted content
   t: z.literal('encrypted')
 })
 
-export type SessionMessageContent = z.infer<typeof SessionMessageContentSchema>
-
 /**
  * Update body for new messages
  */
-export const UpdateBodySchema = z.object({
+const UpdateBodySchema = z.object({
   message: z.object({
     id: z.string(),
     seq: z.number(),
@@ -30,9 +28,7 @@ export const UpdateBodySchema = z.object({
   t: z.literal('new-message')
 })
 
-export type UpdateBody = z.infer<typeof UpdateBodySchema>
-
-export const UpdateSessionBodySchema = z.object({
+const UpdateSessionBodySchema = z.object({
   t: z.literal('update-session'),
   sid: z.string(),
   metadata: z.object({
@@ -45,12 +41,10 @@ export const UpdateSessionBodySchema = z.object({
   }).nullish()
 })
 
-export type UpdateSessionBody = z.infer<typeof UpdateSessionBodySchema>
-
 /**
  * Update body for machine updates
  */
-export const UpdateMachineBodySchema = z.object({
+const UpdateMachineBodySchema = z.object({
   t: z.literal('update-machine'),
   machineId: z.string(),
   metadata: z.object({
@@ -68,7 +62,7 @@ export type UpdateMachineBody = z.infer<typeof UpdateMachineBodySchema>
 /**
  * Update body for new session creation
  */
-export const NewSessionBodySchema = z.object({
+const NewSessionBodySchema = z.object({
   t: z.literal('new-session'),
   id: z.string(),
   seq: z.number(),
@@ -83,12 +77,10 @@ export const NewSessionBodySchema = z.object({
   updatedAt: z.number()
 })
 
-export type NewSessionBody = z.infer<typeof NewSessionBodySchema>
-
 /**
  * GitHub profile data from OAuth
  */
-export const GitHubProfileSchema = z.object({
+const GitHubProfileSchema = z.object({
   id: z.number(),
   login: z.string(),
   name: z.string().nullable().optional(),
@@ -99,7 +91,7 @@ export const GitHubProfileSchema = z.object({
 /**
  * Update body for account changes
  */
-export const UpdateAccountBodySchema = z.object({
+const UpdateAccountBodySchema = z.object({
   t: z.literal('update-account'),
   id: z.string(),
   settings: z.object({
@@ -109,12 +101,10 @@ export const UpdateAccountBodySchema = z.object({
   github: GitHubProfileSchema.nullish()
 })
 
-export type UpdateAccountBody = z.infer<typeof UpdateAccountBodySchema>
-
 /**
  * Update body for new machine registration
  */
-export const NewMachineBodySchema = z.object({
+const NewMachineBodySchema = z.object({
   t: z.literal('new-machine'),
   machineId: z.string(),
   seq: z.number(),
@@ -129,12 +119,130 @@ export const NewMachineBodySchema = z.object({
   updatedAt: z.number()
 })
 
-export type NewMachineBody = z.infer<typeof NewMachineBodySchema>
+/**
+ * Update body for session deletion (from mobile app archival)
+ */
+const DeleteSessionBodySchema = z.object({
+  t: z.literal('delete-session'),
+  sid: z.string()
+})
+
+/**
+ * Update body for new artifact creation
+ */
+const NewArtifactBodySchema = z.object({
+  t: z.literal('new-artifact'),
+  artifactId: z.string(),
+  header: z.string(),
+  headerVersion: z.number(),
+  body: z.string().optional(),
+  bodyVersion: z.number().optional(),
+  dataEncryptionKey: z.string(),
+  seq: z.number(),
+  createdAt: z.number(),
+  updatedAt: z.number()
+})
+
+/**
+ * Update body for artifact updates
+ */
+const UpdateArtifactBodySchema = z.object({
+  t: z.literal('update-artifact'),
+  artifactId: z.string(),
+  header: z.object({
+    value: z.string(),
+    version: z.number()
+  }).optional(),
+  body: z.object({
+    value: z.string(),
+    version: z.number()
+  }).optional()
+})
+
+/**
+ * Update body for artifact deletion
+ */
+const DeleteArtifactBodySchema = z.object({
+  t: z.literal('delete-artifact'),
+  artifactId: z.string()
+})
+
+/**
+ * Update body for relationship changes (friend/social features)
+ * Note: CLI doesn't use social features, but schema needed for type completeness
+ */
+const RelationshipUpdatedBodySchema = z.object({
+  t: z.literal('relationship-updated'),
+  fromUserId: z.string(),
+  toUserId: z.string(),
+  status: z.enum(['none', 'requested', 'pending', 'friend', 'rejected']),
+  action: z.enum(['created', 'updated', 'deleted']),
+  fromUser: z.object({
+    id: z.string(),
+    firstName: z.string(),
+    lastName: z.string().nullable(),
+    avatar: z.object({
+      path: z.string(),
+      url: z.string(),
+      width: z.number().optional(),
+      height: z.number().optional(),
+      thumbhash: z.string().optional()
+    }).nullable(),
+    username: z.string(),
+    bio: z.string().nullable(),
+    status: z.enum(['none', 'requested', 'pending', 'friend', 'rejected'])
+  }).optional(),
+  toUser: z.object({
+    id: z.string(),
+    firstName: z.string(),
+    lastName: z.string().nullable(),
+    avatar: z.object({
+      path: z.string(),
+      url: z.string(),
+      width: z.number().optional(),
+      height: z.number().optional(),
+      thumbhash: z.string().optional()
+    }).nullable(),
+    username: z.string(),
+    bio: z.string().nullable(),
+    status: z.enum(['none', 'requested', 'pending', 'friend', 'rejected'])
+  }).optional(),
+  timestamp: z.number()
+})
+
+/**
+ * Update body for new feed posts (activity feed)
+ * Note: CLI doesn't display activity feed, but schema needed for type completeness
+ */
+const NewFeedPostBodySchema = z.object({
+  t: z.literal('new-feed-post'),
+  id: z.string(),
+  body: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('friend_request'), uid: z.string() }),
+    z.object({ kind: z.literal('friend_accepted'), uid: z.string() }),
+    z.object({ kind: z.literal('text'), text: z.string() })
+  ]),
+  cursor: z.string(),
+  createdAt: z.number(),
+  repeatKey: z.string().nullable()
+})
+
+/**
+ * Update body for KV batch updates (settings sync)
+ */
+const KvBatchUpdateBodySchema = z.object({
+  t: z.literal('kv-batch-update'),
+  changes: z.array(z.object({
+    key: z.string(),
+    value: z.string().nullable(),
+    version: z.number()
+  }))
+})
 
 /**
  * Update event from server
  */
-export const UpdateSchema = z.object({
+const UpdateSchema = z.object({
   id: z.string(),
   seq: z.number(),
   body: z.union([
@@ -144,11 +252,75 @@ export const UpdateSchema = z.object({
     NewSessionBodySchema,
     UpdateAccountBodySchema,
     NewMachineBodySchema,
+    DeleteSessionBodySchema,
+    NewArtifactBodySchema,
+    UpdateArtifactBodySchema,
+    DeleteArtifactBodySchema,
+    RelationshipUpdatedBodySchema,
+    NewFeedPostBodySchema,
+    KvBatchUpdateBodySchema,
   ]),
   createdAt: z.number()
 })
 
 export type Update = z.infer<typeof UpdateSchema>
+
+/** Type exports for update body schemas */
+export type DeleteSessionBody = z.infer<typeof DeleteSessionBodySchema>
+export type NewArtifactBody = z.infer<typeof NewArtifactBodySchema>
+export type UpdateArtifactBody = z.infer<typeof UpdateArtifactBodySchema>
+export type DeleteArtifactBody = z.infer<typeof DeleteArtifactBodySchema>
+export type RelationshipUpdatedBody = z.infer<typeof RelationshipUpdatedBodySchema>
+export type NewFeedPostBody = z.infer<typeof NewFeedPostBodySchema>
+export type KvBatchUpdateBody = z.infer<typeof KvBatchUpdateBodySchema>
+
+/**
+ * Ephemeral activity update - real-time session activity status
+ */
+export type EphemeralActivityUpdate = {
+  type: 'activity'
+  id: string
+  active: boolean
+  activeAt: number
+  thinking: boolean
+}
+
+/**
+ * Ephemeral usage update - real-time cost/token tracking
+ */
+export type EphemeralUsageUpdate = {
+  type: 'usage'
+  id: string
+  key: string
+  timestamp: number
+  tokens: {
+    total: number
+    input: number
+    output: number
+    cache_creation: number
+    cache_read: number
+  }
+  cost: {
+    total: number
+    input: number
+    output: number
+  }
+}
+
+/**
+ * Ephemeral machine activity update - daemon status sync
+ */
+export type EphemeralMachineActivityUpdate = {
+  type: 'machine-activity'
+  id: string
+  active: boolean
+  activeAt: number
+}
+
+/**
+ * Union of all ephemeral update types
+ */
+export type EphemeralUpdate = EphemeralActivityUpdate | EphemeralUsageUpdate | EphemeralMachineActivityUpdate
 
 /**
  * Socket events from server to client
@@ -159,7 +331,7 @@ export interface ServerToClientEvents {
   'rpc-registered': (data: { method: string }) => void
   'rpc-unregistered': (data: { method: string }) => void
   'rpc-error': (data: { type: string, error: string }) => void
-  ephemeral: (data: { type: 'activity', id: string, active: boolean, activeAt: number, thinking: boolean }) => void
+  ephemeral: (data: EphemeralUpdate) => void
   auth: (data: { success: boolean, user: string }) => void
   error: (data: { message: string }) => void
 }
@@ -238,7 +410,7 @@ export type Session = {
 /**
  * Machine metadata - static information (rarely changes)
  */
-export const MachineMetadataSchema = z.object({
+const MachineMetadataSchema = z.object({
   host: z.string(),
   platform: z.string(),
   happyCliVersion: z.string(),
@@ -252,7 +424,7 @@ export type MachineMetadata = z.infer<typeof MachineMetadataSchema>
 /**
  * Daemon state - dynamic runtime information (frequently updated)
  */
-export const DaemonStateSchema = z.object({
+const DaemonStateSchema = z.object({
   status: z.union([
     z.enum(['running', 'shutting-down']),
     z.string() // Forward compatibility
@@ -281,22 +453,9 @@ export type Machine = {
 }
 
 /**
- * Session message from API
- */
-export const SessionMessageSchema = z.object({
-  content: SessionMessageContentSchema,
-  createdAt: z.number(),
-  id: z.string(),
-  seq: z.number(),
-  updatedAt: z.number()
-})
-
-export type SessionMessage = z.infer<typeof SessionMessageSchema>
-
-/**
  * Message metadata schema
  */
-export const MessageMetaSchema = z.object({
+const MessageMetaSchema = z.object({
   sentFrom: z.string().optional(), // Source identifier
   permissionMode: z.string().optional(), // Permission mode for this message
   model: z.string().nullable().optional(), // Model name for this message (null = reset)
@@ -307,12 +466,10 @@ export const MessageMetaSchema = z.object({
   disallowedTools: z.array(z.string()).nullable().optional() // Disallowed tools for this message (null = reset)
 })
 
-export type MessageMeta = z.infer<typeof MessageMetaSchema>
-
 /**
  * API response types
  */
-export const CreateSessionResponseSchema = z.object({
+const CreateSessionResponseSchema = z.object({
   session: z.object({
     id: z.string(),
     tag: z.string(),
@@ -340,7 +497,7 @@ export const UserMessageSchema = z.object({
 
 export type UserMessage = z.infer<typeof UserMessageSchema>
 
-export const AgentMessageSchema = z.object({
+const AgentMessageSchema = z.object({
   role: z.literal('agent'),
   content: z.object({
     type: z.literal('output'),
@@ -349,9 +506,7 @@ export const AgentMessageSchema = z.object({
   meta: MessageMetaSchema.optional()
 })
 
-export type AgentMessage = z.infer<typeof AgentMessageSchema>
-
-export const MessageContentSchema = z.union([UserMessageSchema, AgentMessageSchema])
+const MessageContentSchema = z.union([UserMessageSchema, AgentMessageSchema])
 
 export type MessageContent = z.infer<typeof MessageContentSchema>
 

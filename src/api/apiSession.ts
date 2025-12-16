@@ -31,6 +31,11 @@ export interface ApiSessionClientEvents {
      * @see HAP-166 for metrics details
      */
     syncMetrics: (metrics: SyncMetrics) => void;
+    /**
+     * Emitted when a session is deleted remotely (e.g., archived from mobile app)
+     * @see HAP-352 for type schema alignment
+     */
+    sessionDeleted: (sessionId: string) => void;
 }
 
 /**
@@ -239,8 +244,23 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                 } else if (data.body.t === 'update-machine') {
                     // Session clients shouldn't receive machine updates - log warning
                     logger.debug(`[SOCKET] WARNING: Session client received unexpected machine update - ignoring`);
+                } else if (data.body.t === 'delete-session') {
+                    // Session deleted remotely (e.g., archived from mobile app)
+                    logger.debug(`[SOCKET] Session ${data.body.sid} deleted remotely`);
+                    this.emit('sessionDeleted', data.body.sid);
+                } else if (data.body.t === 'new-artifact' || data.body.t === 'update-artifact' || data.body.t === 'delete-artifact') {
+                    // Artifact events - CLI doesn't manage artifacts, log and ignore
+                    logger.debug(`[SOCKET] Received artifact event ${data.body.t} - ignoring (CLI doesn't manage artifacts)`);
+                } else if (data.body.t === 'relationship-updated' || data.body.t === 'new-feed-post') {
+                    // Social/feed events - CLI doesn't use social features, silently ignore
+                    logger.debug(`[SOCKET] Received social event ${data.body.t} - ignoring (CLI doesn't use social features)`);
+                } else if (data.body.t === 'kv-batch-update') {
+                    // KV batch updates - settings sync from mobile
+                    // TODO: Implement proper settings sync if CLI needs to track mobile settings changes
+                    logger.debug(`[SOCKET] Received kv-batch-update with ${data.body.changes.length} changes - not yet implemented`);
                 } else {
-                    // If not a user message, it might be a permission response or other message type
+                    // Unknown event type - log for debugging but don't crash
+                    logger.debug(`[SOCKET] Received unknown update type: ${(data.body as { t: string }).t}`);
                     this.emit('message', data.body);
                 }
             } catch (error) {
