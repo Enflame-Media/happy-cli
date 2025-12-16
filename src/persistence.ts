@@ -31,6 +31,11 @@ interface Settings {
    * Can be overridden via HAPPY_TELEMETRY environment variable.
    */
   telemetry?: TelemetryConfig
+  /**
+   * Whether we've shown the telemetry opt-in notice to the user.
+   * This is shown once on first run to inform about telemetry options.
+   */
+  telemetryNoticeShown?: boolean
 }
 
 const defaultSettings: Settings = {
@@ -541,20 +546,5 @@ export async function acquireDaemonLock(
     }
   }
   return null;
-}
-
-/**
- * Release daemon lock by closing handle and deleting lock file
- */
-export async function releaseDaemonLock(lockHandle: FileHandle): Promise<void> {
-  try {
-    await lockHandle.close();
-  } catch { }
-
-  try {
-    if (existsSync(configuration.daemonLockFile)) {
-      unlinkSync(configuration.daemonLockFile);
-    }
-  } catch { }
 }
 

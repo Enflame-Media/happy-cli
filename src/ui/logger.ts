@@ -10,7 +10,8 @@ import { appendFileSync, renameSync } from 'fs'
 import { configuration } from '@/configuration'
 import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs'
 import { join, basename, dirname } from 'node:path'
-import { readDaemonState } from '@/persistence'
+// Note: readDaemonState is imported dynamically in listDaemonLogFiles() to avoid
+// circular dependency: logger.ts -> persistence.ts -> logger.ts
 
 /**
  * Configure chalk color output for non-interactive environments.
@@ -610,7 +611,25 @@ class Logger {
    */
   errorAndExit(message: string, error?: Error | unknown, exitCode: number = 1): never {
     this.error(message, error, { suggestDebug: true })
-    process.exit(exitCode)
+
+    // Capture fatal errors with Sentry before exiting
+    // Dynamic import to avoid circular dependency issues
+    import('@/telemetry').then(({ captureException, shutdownTelemetry }) => {
+      if (error) {
+        captureException(error, { message, exitCode, fatal: true })
+      }
+      // Flush telemetry synchronously-ish before exit
+      void shutdownTelemetry(1000).finally(() => {
+        process.exit(exitCode)
+      })
+    }).catch(() => {
+      // If telemetry import fails, just exit
+      process.exit(exitCode)
+    })
+
+    // TypeScript needs this for the never return type
+    // The process.exit in the promise will actually terminate
+    throw new Error('Unreachable')
   }
 
   /**
@@ -794,7 +813,7 @@ export type LogFileInfo = {
  * List daemon log files in descending modification time order.
  * Returns up to `limit` entries; empty array if none.
  */
-export async function listDaemonLogFiles(limit: number = 50): Promise<LogFileInfo[]> {
+async function listDaemonLogFiles(limit: number = 50): Promise<LogFileInfo[]> {
   try {
     const logsDir = configuration.logsDir;
     if (!existsSync(logsDir)) {
@@ -812,6 +831,8 @@ export async function listDaemonLogFiles(limit: number = 50): Promise<LogFileInf
 
     // Prefer the path persisted by the daemon if present (return 0th element if present)
     try {
+      // Dynamic import to avoid circular dependency: logger.ts -> persistence.ts -> logger.ts
+      const { readDaemonState } = await import('@/persistence');
       const state = await readDaemonState();
 
       if (!state) {

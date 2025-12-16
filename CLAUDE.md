@@ -185,7 +185,78 @@ User interface components.
 - Crypto: TweetNaCl
 - Terminal: node-pty, chalk, qrcode-terminal
 - Validation: Zod
-- Testing: Vitest 
+- Testing: Vitest
+- Telemetry: @sentry/node (error reporting)
+
+## Telemetry
+
+Happy CLI includes optional, privacy-first telemetry for error reporting and usage analytics.
+
+### Privacy Model
+
+- **Disabled by default**: No data is collected unless explicitly enabled
+- **Opt-in only**: Users must set `HAPPY_TELEMETRY=true` to enable
+- **Anonymized by default**: When enabled, all data is anonymized (no PII)
+- **Category-based**: Error reporting, usage tracking, and performance metrics can be individually controlled
+
+### Configuration
+
+Telemetry is configured via environment variables (highest priority) or settings file:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `HAPPY_TELEMETRY` | Master switch (true/false) | false |
+| `HAPPY_TELEMETRY_ANONYMIZE` | Force anonymization | true |
+| `HAPPY_SENTRY_DSN` | Sentry DSN for errors | (none) |
+| `HAPPY_TELEMETRY_ENDPOINT` | Usage metrics endpoint | (none) |
+
+### Architecture
+
+The telemetry module (`/src/telemetry/`) follows a layered design:
+
+1. **Configuration Layer** (`config.ts`, `types.ts`)
+   - Loads config from env vars and settings file
+   - Provides `TelemetryConfig` interface with categories
+
+2. **Error Reporting** (`sentry.ts`)
+   - Sentry integration for crash/error reporting
+   - `beforeSend` hook for anonymization
+   - Sensitive data scrubbing
+
+3. **Usage/Performance** (`sender.ts`)
+   - Batched event queue with periodic flush
+   - `trackEvent()` for usage tracking
+   - `trackMetric()` for performance data
+
+4. **Initialization** (`init.ts`)
+   - Single entry point: `initializeTelemetry()`
+   - Process exit handling with `shutdownTelemetry()`
+
+### Usage in Code
+
+```typescript
+import { captureException, trackEvent, trackMetric } from '@/telemetry'
+
+// Capture errors (only sent if telemetry.categories.errors is enabled)
+try {
+  await riskyOperation()
+} catch (error) {
+  captureException(error, { context: 'operationName' })
+}
+
+// Track usage events (only sent if telemetry.categories.usage is enabled)
+trackEvent('feature_used', { feature: 'daemon_start' })
+
+// Track performance (only sent if telemetry.categories.performance is enabled)
+const start = Date.now()
+await operation()
+trackMetric('command_duration', Date.now() - start, { command: 'start' })
+```
+
+### User Notice
+
+On first run, users see a one-time informational notice about telemetry options.
+This is controlled by the `telemetryNoticeShown` setting flag. 
 
 
 # Running the Daemon

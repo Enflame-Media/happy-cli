@@ -32,11 +32,16 @@ import { spawnHappyCLI } from './utils/spawnHappyCLI'
 import { claudeCliPath } from './claude/claudeLocal'
 import { execFileSync } from 'node:child_process'
 import { checkForUpdatesAndNotify } from './utils/checkForUpdates'
+import { initializeTelemetry, showTelemetryNoticeIfNeeded } from './telemetry'
 
 
 (async () => {
   // Validate environment variables early (logs warnings for unusual configs)
   validateEnv()
+
+  // Initialize telemetry early (non-blocking, respects user preferences)
+  // This sets up error reporting and usage tracking if enabled
+  void initializeTelemetry()
 
   // Non-blocking version check - runs in background without blocking startup
   // Uses 5-second timeout and silently handles network errors (HAP-134)
@@ -381,6 +386,9 @@ ${chalk.gray(`Last checked: ${new Date(health.timestamp).toLocaleString()}`)}
     const {
       credentials
     } = await authAndSetupMachineIfNeeded();
+
+    // Show telemetry opt-in notice once (non-blocking, informational only)
+    await showTelemetryNoticeIfNeeded()
 
     // Always auto-start daemon for simplicity
     logger.debug('Ensuring Happy background service is running & matches our version...');
