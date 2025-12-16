@@ -9,8 +9,10 @@
  * - Event-based messaging similar to Socket.io API
  * - Acknowledgement system for request-response patterns
  * - Proper connection state management
+ * - WeakRef-based event handlers for GC-friendly memory management (HAP-361)
  *
  * @see HAP-261 - Migration from Socket.io to native WebSocket
+ * @see HAP-361 - WeakRef implementation for event handlers
  */
 
 import { logger } from '@/ui/logger';
@@ -58,6 +60,15 @@ interface PendingAck<T = unknown> {
     resolve: (value: T) => void;
     reject: (error: Error) => void;
     timer: NodeJS.Timeout;
+}
+
+/**
+ * Metadata for FinalizationRegistry cleanup (HAP-361)
+ * Stores the event name and WeakRef so dead handlers can be removed from Sets
+ */
+interface HandlerMetadata {
+    event: string;
+    weakRef: WeakRef<EventCallback>;
 }
 
 /**
@@ -119,8 +130,36 @@ export class HappyWebSocket {
     private static readonly MAX_HANDLERS_PER_EVENT = 100;
     private static readonly HANDLER_WARNING_THRESHOLD = 90;
 
-    // Event handlers with bounded growth (HAP-353)
-    private eventHandlers: Map<string, Set<EventCallback>> = new Map();
+    /**
+     * Event handlers with WeakRef for GC-friendly memory management (HAP-361)
+     *
+     * IMPORTANT BEHAVIORAL CHANGE: Handlers are stored as WeakRefs, meaning they
+     * will be garbage collected if the caller doesn't retain a reference.
+     *
+     * Example (handler persists):
+     *   const handler = (data) => console.log(data);
+     *   socket.on('message', handler);  // handler retained by caller
+     *
+     * Example (handler may be GC'd):
+     *   socket.on('message', (data) => console.log(data));  // inline, no external ref
+     *
+     * This change prevents memory leaks from orphaned handlers in long-running
+     * daemon sessions. See HAP-353 for bounds enforcement context.
+     */
+    private eventHandlers: Map<string, Set<WeakRef<EventCallback>>> = new Map();
+
+    /**
+     * O(1) lookup for .off() - maps original callback to its WeakRef (HAP-361)
+     * Uses WeakMap so the lookup itself doesn't prevent callback GC
+     */
+    private callbackToWeakRef: WeakMap<EventCallback, WeakRef<EventCallback>> = new WeakMap();
+
+    /**
+     * FinalizationRegistry for automatic cleanup when callbacks are GC'd (HAP-361)
+     * When a callback is garbage collected, removes its WeakRef from eventHandlers
+     */
+    private readonly handlerRegistry: FinalizationRegistry<HandlerMetadata>;
+
     private rpcHandler: RpcCallback | null = null;
 
     // Acknowledgement tracking
@@ -145,6 +184,16 @@ export class HappyWebSocket {
             maxReconnectionAttempts: config.maxReconnectionAttempts ?? Infinity,
             ackTimeout: config.ackTimeout ?? 5000,
         };
+
+        // Initialize FinalizationRegistry for automatic handler cleanup (HAP-361)
+        // When a callback is garbage collected, this removes its WeakRef from the Set
+        this.handlerRegistry = new FinalizationRegistry((metadata: HandlerMetadata) => {
+            const handlers = this.eventHandlers.get(metadata.event);
+            if (handlers) {
+                handlers.delete(metadata.weakRef);
+                logger.debug(`[HappyWebSocket] Handler for '${metadata.event}' was garbage collected`);
+            }
+        });
     }
 
     /**
@@ -370,6 +419,10 @@ export class HappyWebSocket {
 
     /**
      * Register an event handler
+     *
+     * IMPORTANT (HAP-361): Handlers are stored as WeakRefs. The handler will be
+     * garbage collected if the caller doesn't retain a reference to the callback.
+     * Store the callback in a variable to ensure it persists.
      */
     on<T = unknown>(event: string, callback: EventCallback<T>): this {
         if (!this.eventHandlers.has(event)) {
@@ -377,19 +430,34 @@ export class HappyWebSocket {
         }
 
         const handlers = this.eventHandlers.get(event)!;
+        const typedCallback = callback as EventCallback;
 
-        // Bounds enforcement: prevent unbounded growth (HAP-353)
-        if (handlers.size >= HappyWebSocket.MAX_HANDLERS_PER_EVENT) {
+        // Check if callback already registered (via WeakMap lookup)
+        const existingWeakRef = this.callbackToWeakRef.get(typedCallback);
+        if (existingWeakRef && handlers.has(existingWeakRef)) {
+            return this; // Already registered
+        }
+
+        // Bounds enforcement: count only live handlers (HAP-353)
+        const liveCount = this.countLiveHandlers(handlers);
+        if (liveCount >= HappyWebSocket.MAX_HANDLERS_PER_EVENT) {
             logger.warn(`[HappyWebSocket] Max handlers (${HappyWebSocket.MAX_HANDLERS_PER_EVENT}) reached for event '${event}'. Rejecting new handler.`);
             return this;
         }
 
         // Warning at threshold
-        if (handlers.size === HappyWebSocket.HANDLER_WARNING_THRESHOLD) {
-            logger.warn(`[HappyWebSocket] Handler count approaching limit (${handlers.size}/${HappyWebSocket.MAX_HANDLERS_PER_EVENT}) for event '${event}'`);
+        if (liveCount === HappyWebSocket.HANDLER_WARNING_THRESHOLD) {
+            logger.warn(`[HappyWebSocket] Handler count approaching limit (${liveCount}/${HappyWebSocket.MAX_HANDLERS_PER_EVENT}) for event '${event}'`);
         }
 
-        handlers.add(callback as EventCallback);
+        // Create WeakRef and store (HAP-361)
+        const weakRef = new WeakRef(typedCallback);
+        handlers.add(weakRef);
+        this.callbackToWeakRef.set(typedCallback, weakRef);
+
+        // Register for cleanup notification when callback is GC'd
+        this.handlerRegistry.register(typedCallback, { event, weakRef }, typedCallback);
+
         return this;
     }
 
@@ -407,7 +475,14 @@ export class HappyWebSocket {
     off<T = unknown>(event: string, callback: EventCallback<T>): this {
         const handlers = this.eventHandlers.get(event);
         if (handlers) {
-            handlers.delete(callback as EventCallback);
+            const typedCallback = callback as EventCallback;
+            const weakRef = this.callbackToWeakRef.get(typedCallback);
+            if (weakRef) {
+                handlers.delete(weakRef);
+                this.callbackToWeakRef.delete(typedCallback);
+                // Unregister from FinalizationRegistry to prevent stale cleanup
+                this.handlerRegistry.unregister(typedCallback);
+            }
         }
         return this;
     }
@@ -417,11 +492,32 @@ export class HappyWebSocket {
      */
     removeAllListeners(event?: string): this {
         if (event) {
+            const handlers = this.eventHandlers.get(event);
+            if (handlers) {
+                // Unregister all handlers for this event from FinalizationRegistry
+                for (const weakRef of handlers) {
+                    const callback = weakRef.deref();
+                    if (callback) {
+                        this.handlerRegistry.unregister(callback);
+                        this.callbackToWeakRef.delete(callback);
+                    }
+                }
+            }
             this.eventHandlers.delete(event);
             if (event === 'rpc-request') {
                 this.rpcHandler = null;
             }
         } else {
+            // Unregister all handlers from FinalizationRegistry
+            for (const handlers of this.eventHandlers.values()) {
+                for (const weakRef of handlers) {
+                    const callback = weakRef.deref();
+                    if (callback) {
+                        this.handlerRegistry.unregister(callback);
+                        this.callbackToWeakRef.delete(callback);
+                    }
+                }
+            }
             this.eventHandlers.clear();
             this.rpcHandler = null;
         }
@@ -430,16 +526,32 @@ export class HappyWebSocket {
 
     /**
      * Internal event emission
+     *
+     * WeakRef iteration (HAP-361): Dereferences each WeakRef and cleans up
+     * dead references during iteration for efficiency.
      */
     private emitInternal(event: string, data: unknown): void {
         const handlers = this.eventHandlers.get(event);
         if (handlers) {
-            for (const handler of handlers) {
-                try {
-                    handler(data);
-                } catch (error) {
-                    logger.debug(`[HappyWebSocket] Error in event handler for '${event}': ${error}`);
+            const deadRefs: WeakRef<EventCallback>[] = [];
+
+            for (const weakRef of handlers) {
+                const handler = weakRef.deref();
+                if (handler) {
+                    try {
+                        handler(data);
+                    } catch (error) {
+                        logger.debug(`[HappyWebSocket] Error in event handler for '${event}': ${error}`);
+                    }
+                } else {
+                    // Collect dead refs for cleanup
+                    deadRefs.push(weakRef);
                 }
+            }
+
+            // Cleanup dead refs after iteration
+            for (const deadRef of deadRefs) {
+                handlers.delete(deadRef);
             }
         }
     }
@@ -540,13 +652,28 @@ export class HappyWebSocket {
     getStats(): { totalHandlers: number; eventTypes: number; pendingAcks: number } {
         let totalHandlers = 0;
         for (const handlers of this.eventHandlers.values()) {
-            totalHandlers += handlers.size;
+            // Count only live handlers (HAP-361)
+            totalHandlers += this.countLiveHandlers(handlers);
         }
         return {
             totalHandlers,
             eventTypes: this.eventHandlers.size,
             pendingAcks: this.pendingAcks.size
         };
+    }
+
+    /**
+     * Count live handlers in a Set of WeakRefs (HAP-361)
+     * Iterates through WeakRefs and counts only those that haven't been GC'd
+     */
+    private countLiveHandlers(handlers: Set<WeakRef<EventCallback>>): number {
+        let count = 0;
+        for (const weakRef of handlers) {
+            if (weakRef.deref()) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /**
