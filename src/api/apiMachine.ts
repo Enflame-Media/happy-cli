@@ -295,11 +295,20 @@ export class ApiMachineClient {
             } else if (updateType === 'new-machine') {
                 // Silently ignore new machine registrations (not relevant to this daemon)
                 return;
-            } else if (updateType === 'new-session' || updateType === 'update-session' || updateType === 'new-message') {
+            } else if (updateType === 'new-session' || updateType === 'update-session' || updateType === 'new-message' || updateType === 'delete-session') {
                 // Silently ignore session-scoped updates (handled by session clients, not machine client)
                 return;
             } else if (updateType === 'update-account') {
                 // Silently ignore account updates (not relevant to machine daemon)
+                return;
+            } else if (updateType === 'new-artifact' || updateType === 'update-artifact' || updateType === 'delete-artifact') {
+                // Silently ignore artifact updates (handled by app, not machine daemon)
+                return;
+            } else if (updateType === 'relationship-updated' || updateType === 'new-feed-post') {
+                // Silently ignore social/feed updates (handled by app, not machine daemon)
+                return;
+            } else if (updateType === 'kv-batch-update') {
+                // Silently ignore KV settings updates (handled by app, not machine daemon)
                 return;
             } else {
                 // Log truly unknown update types for debugging
