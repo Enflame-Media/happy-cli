@@ -72,6 +72,16 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
     /** Optional context notification service for push notifications on high context usage @see HAP-343 */
     private contextNotificationService: ContextNotificationService | null = null;
 
+    /**
+     * Socket event handlers - stored as class properties to prevent GC (HAP-363)
+     * WeakRef-based HappyWebSocket requires handlers to be retained by the caller.
+     */
+    private readonly onSocketConnect: () => void;
+    private readonly onSocketDisconnect: (reason: string) => void;
+    private readonly onSocketConnectError: (error: unknown) => void;
+    private readonly onSocketUpdate: (data: Update) => Promise<void>;
+    private readonly onSocketError: (error: unknown) => void;
+
     constructor(token: string, session: Session) {
         super()
         this.token = token;
@@ -125,10 +135,10 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
         );
 
         //
-        // Handlers
+        // Handlers - stored as class properties to prevent GC (HAP-363)
         //
 
-        this.socket.on('connect', () => {
+        this.onSocketConnect = () => {
             logger.debug('Socket connected successfully');
             this.rpcHandlerManager.onWebSocketConnect(this.socket);
 
@@ -148,14 +158,15 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                 });
             }
             this.hasConnectedBefore = true;
-        })
+        };
+        this.socket.on('connect', this.onSocketConnect);
 
         // Set up global RPC request handler
         this.socket.onRpcRequest(async (data: { method: string, params: string }, callback: (response: string) => void) => {
             callback(await this.rpcHandlerManager.handleRequest(data));
         })
 
-        this.socket.on('disconnect', (reason) => {
+        this.onSocketDisconnect = (reason) => {
             logger.debug('[API] Socket disconnected:', reason);
             this.rpcHandlerManager.onWebSocketDisconnect();
             // Record disconnection for metrics
@@ -165,16 +176,18 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                 logger.warn('[Happy] Disconnected from server, reconnecting...');
                 this.hasShownDisconnectWarning = true;
             }
-        })
+        };
+        this.socket.on('disconnect', this.onSocketDisconnect);
 
-        this.socket.on('connect_error', (error) => {
+        this.onSocketConnectError = (error) => {
             logger.debug('[API] Socket connection error:', error);
             this.rpcHandlerManager.onWebSocketDisconnect();
-        })
+        };
+        this.socket.on('connect_error', this.onSocketConnectError);
 
         // Server events
         // Note: async callback is intentional - we need async to properly serialize state updates with locks
-        this.socket.on<Update>('update', async (data: Update) => {
+        this.onSocketUpdate = async (data: Update) => {
             try {
                 logger.debugLargeJson('[SOCKET] [UPDATE] Received update:', data);
 
@@ -266,12 +279,14 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
             } catch (error) {
                 logger.debug('[SOCKET] [UPDATE] [ERROR] Error handling update', { error });
             }
-        });
+        };
+        this.socket.on<Update>('update', this.onSocketUpdate);
 
         // DEATH
-        this.socket.on('error', (error) => {
+        this.onSocketError = (error) => {
             logger.debug('[API] Socket error:', error);
-        });
+        };
+        this.socket.on('error', this.onSocketError);
 
         //
         // Connect (after short delay to give a time to add handlers)

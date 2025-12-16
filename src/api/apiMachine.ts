@@ -33,6 +33,16 @@ export class ApiMachineClient {
     private isShuttingDown = false;
     private rpcHandlerManager: RpcHandlerManager;
 
+    /**
+     * Socket event handlers - stored as class properties to prevent GC (HAP-363)
+     * WeakRef-based HappyWebSocket requires handlers to be retained by the caller.
+     */
+    private onSocketConnect!: () => void;
+    private onSocketDisconnect!: () => void;
+    private onSocketUpdate!: (data: Update) => void;
+    private onSocketConnectError!: (error: unknown) => void;
+    private onSocketError!: (error: Error) => void;
+
     constructor(
         private token: string,
         private machine: Machine
@@ -222,7 +232,8 @@ export class ApiMachineClient {
             }
         );
 
-        this.socket.on('connect', () => {
+        // Handlers - stored as class properties to prevent GC (HAP-363)
+        this.onSocketConnect = () => {
             logger.debug('[API MACHINE] Connected to server');
 
             // Update daemon state to running
@@ -242,13 +253,15 @@ export class ApiMachineClient {
 
             // Start keep-alive
             this.startKeepAlive();
-        });
+        };
+        this.socket.on('connect', this.onSocketConnect);
 
-        this.socket.on('disconnect', () => {
+        this.onSocketDisconnect = () => {
             logger.debug('[API MACHINE] Disconnected from server');
             this.rpcHandlerManager.onWebSocketDisconnect();
             this.stopKeepAlive();
-        });
+        };
+        this.socket.on('disconnect', this.onSocketDisconnect);
 
         // Single consolidated RPC handler
         this.socket.onRpcRequest(async (data: { method: string, params: string }, callback: (response: string) => void) => {
@@ -257,7 +270,7 @@ export class ApiMachineClient {
         });
 
         // Handle update events from server
-        this.socket.on<Update>('update', (data: Update) => {
+        this.onSocketUpdate = (data: Update) => {
             const updateType = data.body.t;
 
             // Machine clients should only care about machine updates for this specific machine
@@ -314,15 +327,18 @@ export class ApiMachineClient {
                 // Log truly unknown update types for debugging
                 logger.debug(`[API MACHINE] Received unhandled update type: ${updateType}`);
             }
-        });
+        };
+        this.socket.on<Update>('update', this.onSocketUpdate);
 
-        this.socket.on('connect_error', (error) => {
+        this.onSocketConnectError = (error) => {
             logger.debug(`[API MACHINE] Connection error: ${(error as Error).message}`);
-        });
+        };
+        this.socket.on('connect_error', this.onSocketConnectError);
 
-        this.socket.on('error', (error: Error) => {
+        this.onSocketError = (error: Error) => {
             logger.debug('[API MACHINE] Socket error:', error);
-        });
+        };
+        this.socket.on('error', this.onSocketError);
 
         // Connect to server
         this.socket.connect();
