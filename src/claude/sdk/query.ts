@@ -66,14 +66,14 @@ export class Query implements AsyncIterableIterator<SDKMessage>, AsyncDisposable
         return this.sdkMessages.next(...args)
     }
 
-    return(value?: any): Promise<IteratorResult<SDKMessage>> {
+    return(value?: unknown): Promise<IteratorResult<SDKMessage>> {
         if (this.sdkMessages.return) {
             return this.sdkMessages.return(value)
         }
         return Promise.resolve({ done: true, value: undefined })
     }
 
-    throw(e: any): Promise<IteratorResult<SDKMessage>> {
+    throw(e?: unknown): Promise<IteratorResult<SDKMessage>> {
         if (this.sdkMessages.throw) {
             return this.sdkMessages.throw(e)
         }

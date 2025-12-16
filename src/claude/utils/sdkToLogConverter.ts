@@ -14,6 +14,46 @@ import type {
 import type { RawJSONLines } from '@/claude/types'
 
 /**
+ * Permission mode type used throughout the converter
+ */
+type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan'
+
+/**
+ * Extended properties added during SDK-to-log conversion
+ * These are passthrough properties not in the base RawJSONLines schema
+ */
+interface ExtendedLogFields {
+    mode?: PermissionMode
+    requestId?: string
+    toolUseResult?: unknown
+    parentUuid?: string | null
+    isSidechain?: boolean
+    userType?: 'external'
+    cwd?: string
+    sessionId?: string
+    version?: string
+    gitBranch?: string
+    timestamp?: string
+    subtype?: string
+    model?: string
+    tools?: string[]
+}
+
+/**
+ * Extended RawJSONLines type with additional passthrough properties
+ */
+type ExtendedRawJSONLines = RawJSONLines & ExtendedLogFields
+
+/**
+ * SDK tool result message shape (not typed in base SDK types)
+ */
+interface SDKToolResultMessage extends SDKMessage {
+    type: 'tool_result'
+    tool_use_id?: string
+    content?: unknown
+}
+
+/**
  * Context for converting SDK messages to log format
  */
 export interface ConversionContext {
@@ -86,10 +126,11 @@ export class SDKToLogConverter {
         const timestamp = new Date().toISOString()
         let parentUuid = this.lastUuid;
         let isSidechain = false;
-        if (sdkMessage.parent_tool_use_id) {
+        const parentToolUseId = sdkMessage.parent_tool_use_id
+        if (typeof parentToolUseId === 'string') {
             isSidechain = true;
-            parentUuid = this.sidechainLastUUID.get((sdkMessage as any).parent_tool_use_id) ?? null;
-            this.sidechainLastUUID.set((sdkMessage as any).parent_tool_use_id!, uuid);
+            parentUuid = this.sidechainLastUUID.get(parentToolUseId) ?? null;
+            this.sidechainLastUUID.set(parentToolUseId, uuid);
         }
         const baseFields = {
             parentUuid: parentUuid,
@@ -108,7 +149,7 @@ export class SDKToLogConverter {
         switch (sdkMessage.type) {
             case 'user': {
                 const userMsg = sdkMessage as SDKUserMessage
-                logMessage = {
+                const userLogMessage: ExtendedRawJSONLines = {
                     ...baseFields,
                     type: 'user',
                     message: userMsg.message
@@ -120,32 +161,26 @@ export class SDKToLogConverter {
                         if (content.type === 'tool_result' && content.tool_use_id && this.responses?.has(content.tool_use_id)) {
                             const response = this.responses.get(content.tool_use_id)
                             if (response?.mode) {
-                                (logMessage as any).mode = response.mode
+                                userLogMessage.mode = response.mode
                             }
                         }
                     }
-                } else if (typeof userMsg.message.content === 'string') {
-                    // Simple string content, no tool result
                 }
+                logMessage = userLogMessage
                 break
             }
 
             case 'assistant': {
                 const assistantMsg = sdkMessage as SDKAssistantMessage
+                // Extract requestId from SDK message if present (passthrough property)
+                const requestId = assistantMsg.requestId
                 logMessage = {
                     ...baseFields,
                     type: 'assistant',
                     message: assistantMsg.message,
                     // Assistant messages often have additional fields
-                    requestId: (assistantMsg as any).requestId
-                }
-                // if (assistantMsg.message.content && Array.isArray(assistantMsg.message.content)) {
-                //     for (const content of assistantMsg.message.content) {
-                //         if (content.type === 'tool_use' && content.id) {
-                //             this.sidechainLastUUID.set(content.id, uuid);
-                //         }
-                //     }
-                // }
+                    ...(typeof requestId === 'string' ? { requestId } : {})
+                } as ExtendedRawJSONLines
                 break
             }
 
@@ -159,15 +194,16 @@ export class SDKToLogConverter {
 
                 // System messages are typically not sent to logs
                 // but we can convert them if needed
+                // Spread the SDK message to preserve passthrough fields
+                const { type: _type, ...restSystemFields } = systemMsg
                 logMessage = {
                     ...baseFields,
+                    ...restSystemFields,
                     type: 'system',
                     subtype: systemMsg.subtype,
                     model: systemMsg.model,
                     tools: systemMsg.tools,
-                    // Include all other fields
-                    ...(systemMsg as any)
-                }
+                } as ExtendedRawJSONLines
                 break
             }
 
@@ -180,40 +216,48 @@ export class SDKToLogConverter {
 
             // Handle tool use results (often comes as user messages)
             case 'tool_result': {
-                const toolMsg = sdkMessage as any
-                const baseLogMessage: any = {
+                const toolMsg = sdkMessage as SDKToolResultMessage
+                const toolUseId = toolMsg.tool_use_id
+                const toolContent = toolMsg.content
+                const toolLogMessage: ExtendedRawJSONLines = {
                     ...baseFields,
                     type: 'user',
                     message: {
                         role: 'user',
                         content: [{
                             type: 'tool_result',
-                            tool_use_id: toolMsg.tool_use_id,
-                            content: toolMsg.content
+                            tool_use_id: toolUseId,
+                            content: toolContent
                         }]
                     },
-                    toolUseResult: toolMsg.content
+                    toolUseResult: toolContent
                 }
 
                 // Add mode if available from responses
-                if (toolMsg.tool_use_id && this.responses?.has(toolMsg.tool_use_id)) {
-                    const response = this.responses.get(toolMsg.tool_use_id)
+                if (typeof toolUseId === 'string' && this.responses?.has(toolUseId)) {
+                    const response = this.responses.get(toolUseId)
                     if (response?.mode) {
-                        baseLogMessage.mode = response.mode
+                        toolLogMessage.mode = response.mode
                     }
                 }
 
-                logMessage = baseLogMessage
+                logMessage = toolLogMessage
                 break
             }
 
-            default:
+            default: {
                 // Unknown message type - pass through with all fields
+                // sdkMessage.type is guaranteed to be a string from SDKMessage interface
+                const { type: messageType, ...restFields } = sdkMessage
                 logMessage = {
                     ...baseFields,
-                    ...sdkMessage,
-                    type: (sdkMessage as any).type // Override type last to ensure it's set
-                } as any
+                    ...restFields,
+                    // The type is unknown but must be user|assistant|system|summary for RawJSONLines
+                    // For unknown types, we preserve the original type as a passthrough
+                    type: messageType as 'user' | 'assistant' | 'system' | 'summary'
+                } as ExtendedRawJSONLines
+                break
+            }
         }
 
         // Update last UUID for parent tracking
@@ -282,7 +326,7 @@ export class SDKToLogConverter {
             this.sidechainLastUUID.set(parentToolUseId, uuid)
         }
         
-        const logMessage: RawJSONLines = {
+        const logMessage: ExtendedRawJSONLines = {
             type: 'user',
             isSidechain: isSidechain,
             uuid,
@@ -305,7 +349,7 @@ export class SDKToLogConverter {
             gitBranch: this.context.gitBranch,
             timestamp,
             toolUseResult: `Error: ${errorMessage}`
-        } as any
+        }
         
         // Update last UUID for tracking
         this.lastUuid = uuid

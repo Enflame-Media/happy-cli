@@ -9,23 +9,21 @@ import { AsyncLock } from '@/utils/lock';
 import { SocketDisconnectedError } from '@/api/socketUtils';
 import { logger } from '@/ui/logger';
 import { EventEmitter } from 'node:events';
+import type { RawJSONLines } from '@/claude/types';
+
+/**
+ * Log message type for the queue - RawJSONLines with passthrough properties
+ */
+type LogMessage = RawJSONLines & Record<string, unknown>;
 
 interface QueueItem {
     id: number;                    // Incremental ID for ordering
-    logMessage: any;               
+    logMessage: LogMessage;
     delayed: boolean;              // Whether this message should be delayed
     delayMs: number;               // Delay duration (e.g., 250ms)
     toolCallIds?: string[];        // Tool calls to track for early release
     released: boolean;             // Whether delay has been released
     sent: boolean;                 // Whether message has been sent
-}
-
-/**
- * Event types emitted by OutgoingMessageQueue
- */
-export interface OutgoingMessageQueueEvents {
-    /** Emitted when a send operation fails due to socket disconnection */
-    sendError: (error: SocketDisconnectedError) => void;
 }
 
 export class OutgoingMessageQueue extends EventEmitter {
@@ -37,7 +35,7 @@ export class OutgoingMessageQueue extends EventEmitter {
     /** Whether the queue is disabled due to socket disconnection */
     private disabled = false;
 
-    constructor(private sendFunction: (message: any) => void) {
+    constructor(private sendFunction: (message: LogMessage) => void) {
         super();
     }
 
@@ -51,7 +49,7 @@ export class OutgoingMessageQueue extends EventEmitter {
     /**
      * Add message to queue
      */
-    enqueue(logMessage: any, options?: {
+    enqueue(logMessage: LogMessage, options?: {
         delay?: number,
         toolCallIds?: string[]
     }) {

@@ -12,7 +12,8 @@ import { logger } from '@/ui/logger';
 
 export interface ClaudeSettings {
   includeCoAuthoredBy?: boolean;
-  [key: string]: any;
+  /** Additional dynamic settings properties */
+  [key: string]: unknown;
 }
 
 /**

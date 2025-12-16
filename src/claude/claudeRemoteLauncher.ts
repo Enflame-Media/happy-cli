@@ -34,7 +34,8 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
 
     // Configure terminal
     let messageBuffer = new MessageBuffer();
-    let inkInstance: any = null;
+    // Ink instance type - using ReturnType<typeof render> but it may be null before render
+    let inkInstance: ReturnType<typeof render> | null = null;
 
     if (hasTTY) {
         console.clear();
@@ -283,13 +284,18 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
 
         // Insert a fake message to start the sidechain
         if (message.type === 'assistant') {
-            let umessage = message as SDKAssistantMessage;
+            const umessage = message as SDKAssistantMessage;
             if (umessage.message.content && Array.isArray(umessage.message.content)) {
-                for (let c of umessage.message.content) {
-                    if (c.type === 'tool_use' && c.name === 'Task' && c.input && typeof (c.input as any).prompt === 'string') {
-                        const logMessage2 = sdkToLogConverter.convertSidechainUserMessage(c.id!, (c.input as any).prompt);
-                        if (logMessage2) {
-                            messageQueue.enqueue(logMessage2);
+                for (const c of umessage.message.content) {
+                    // Check for Task tool with prompt input
+                    if (c.type === 'tool_use' && c.name === 'Task' && c.input && c.id) {
+                        // Type-narrow input to check for prompt property
+                        const taskInput = c.input as Record<string, unknown>;
+                        if (typeof taskInput.prompt === 'string') {
+                            const logMessage2 = sdkToLogConverter.convertSidechainUserMessage(c.id, taskInput.prompt);
+                            if (logMessage2) {
+                                messageQueue.enqueue(logMessage2);
+                            }
                         }
                     }
                 }
