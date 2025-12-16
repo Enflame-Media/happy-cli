@@ -881,10 +881,33 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
      * @param service - The context notification service, or null to disable
      * @see HAP-343
      */
+    /**
+     * Set the context notification service for push notifications on high context usage.
+     * When set, push notifications will be sent when context usage crosses 80% or 95% thresholds.
+     * Also registers an RPC handler to allow mobile app to control notification settings.
+     *
+     * @param service - The context notification service, or null to disable
+     * @see HAP-343
+     * @see HAP-358 - Added RPC handler for respecting user's notification settings
+     */
     setContextNotificationService(service: ContextNotificationService | null): void {
         this.contextNotificationService = service;
         if (service) {
             logger.debug('[API] Context notification service enabled');
+
+            // Register RPC handler for mobile app to control notification settings
+            // This allows the user's contextNotificationsEnabled setting to be respected
+            this.rpcHandlerManager.registerHandler<{ enabled: boolean }, { ok: boolean }>(
+                'setContextNotificationsEnabled',
+                async (data, _signal) => {
+                    logger.debug('[API] setContextNotificationsEnabled RPC received:', data);
+                    if (this.contextNotificationService) {
+                        this.contextNotificationService.setEnabled(data.enabled);
+                        return { ok: true };
+                    }
+                    return { ok: false };
+                }
+            );
         }
     }
 
