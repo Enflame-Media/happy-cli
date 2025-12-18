@@ -16,8 +16,16 @@ import * as Sentry from '@sentry/node'
 import { type TelemetryConfig } from './types'
 import packageJson from '../../package.json'
 
-/** Sentry DSN for error reporting. Set via environment variable. */
-const SENTRY_DSN = process.env.HAPPY_SENTRY_DSN
+/**
+ * Default Sentry DSN for production error reporting.
+ * This is a write-only endpoint - it can only be used to send data, not read it.
+ * Users can override with HAPPY_SENTRY_DSN environment variable if needed.
+ */
+const DEFAULT_SENTRY_DSN =
+  'https://48caf06f6104f37a3cf8ec36fd21a171@o4509604128817152.ingest.us.sentry.io/4510556804743168'
+
+/** Sentry DSN for error reporting. Environment variable takes precedence over default. */
+const SENTRY_DSN = process.env.HAPPY_SENTRY_DSN || DEFAULT_SENTRY_DSN
 
 /**
  * Tracks whether Sentry has been initialized in this process.
