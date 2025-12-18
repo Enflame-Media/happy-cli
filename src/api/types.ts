@@ -126,7 +126,7 @@ export type {
 // New code should use the Api* prefixed versions from @happy/protocol.
 
 /** @deprecated Use ApiUpdateContainer from @happy/protocol */
-export const UpdateSchema = ApiUpdateContainerSchema
+export const UpdateSchema: typeof ApiUpdateContainerSchema = ApiUpdateContainerSchema
 
 /** @deprecated Use ApiUpdateContainer from @happy/protocol */
 export type Update = ApiUpdateContainer
