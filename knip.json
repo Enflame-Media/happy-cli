@@ -6,5 +6,13 @@
   },
   "tags": [
     "-lintignore"
+  ],
+  "entry": [
+    "src/index.ts",
+    "bin/happy.mjs",
+    "scripts/claude_local_launcher.cjs!",
+    "scripts/claude_remote_launcher.cjs!",
+    "scripts/claude_version_utils.cjs!",
+    "scripts/ripgrep_launcher.cjs!"
   ]
 }
