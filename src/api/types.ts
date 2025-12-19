@@ -3,71 +3,14 @@ import { UsageSchema } from '@/claude/types'
 import { PermissionMode } from '@/claude/loop'
 
 // =============================================================================
-// IMPORTS FROM @happy/protocol (shared package)
-// =============================================================================
-// These schemas are imported from the shared protocol package to ensure
-// type consistency across happy-cli, happy-app, and happy-server.
-//
-// Note: Some schemas have minor differences between protocol and CLI expectations.
-// Where differences exist, we keep CLI-specific schemas and document why.
-
-import {
-  // Update schemas
-  ApiUpdateSchema,
-  ApiUpdateContainerSchema,
-  ApiUpdateNewMessageSchema,
-  ApiDeleteSessionSchema,
-  ApiUpdateNewSessionSchema,
-  ApiNewMachineSchema,
-  ApiNewArtifactSchema,
-  ApiUpdateArtifactSchema,
-  ApiDeleteArtifactSchema,
-  ApiRelationshipUpdatedSchema,
-  ApiNewFeedPostSchema,
-  ApiKvBatchUpdateSchema,
-  ApiUpdateMachineStateSchema,
-  ApiUpdateSessionStateSchema,
-  // Common types
-  EncryptedContentSchema,
-  VersionedValueSchema,
-  NullableVersionedValueSchema,
-  // Ephemeral types
-  ApiEphemeralUpdateSchema,
-  ApiEphemeralActivityUpdateSchema,
-  ApiEphemeralUsageUpdateSchema,
-  ApiEphemeralMachineActivityUpdateSchema,
-  // Type exports
-  type ApiUpdate,
-  type ApiUpdateContainer,
-  type ApiUpdateNewMessage,
-  type ApiDeleteSession,
-  type ApiUpdateNewSession,
-  type ApiNewMachine,
-  type ApiNewArtifact,
-  type ApiUpdateArtifact,
-  type ApiDeleteArtifact,
-  type ApiRelationshipUpdated,
-  type ApiNewFeedPost,
-  type ApiKvBatchUpdate,
-  type ApiUpdateMachineState,
-  type ApiUpdateSessionState,
-  type ApiEphemeralUpdate,
-  type ApiEphemeralActivityUpdate,
-  type ApiEphemeralUsageUpdate,
-  type ApiEphemeralMachineActivityUpdate,
-  type GitHubProfile,
-  type EncryptedContent,
-  type VersionedValue,
-  type NullableVersionedValue,
-} from '@happy/protocol'
-
-// =============================================================================
-// RE-EXPORTS FOR BACKWARD COMPATIBILITY
+// RE-EXPORTS FROM @happy/protocol (shared package)
 // =============================================================================
 // These re-exports maintain backward compatibility for existing code that
 // imports from @/api/types instead of directly from @happy/protocol.
+//
+// Using direct re-export syntax to avoid "imported but never used" bundler warnings.
 
-// Update schemas and types
+// Update schemas
 export {
   ApiUpdateSchema,
   ApiUpdateContainerSchema,
@@ -83,17 +26,18 @@ export {
   ApiKvBatchUpdateSchema,
   ApiUpdateMachineStateSchema,
   ApiUpdateSessionStateSchema,
-  // Common types
+  // Common schemas
   EncryptedContentSchema,
   VersionedValueSchema,
   NullableVersionedValueSchema,
-  // Ephemeral types
+  // Ephemeral schemas
   ApiEphemeralUpdateSchema,
   ApiEphemeralActivityUpdateSchema,
   ApiEphemeralUsageUpdateSchema,
   ApiEphemeralMachineActivityUpdateSchema,
-}
+} from '@happy/protocol'
 
+// Type re-exports
 export type {
   ApiUpdate,
   ApiUpdateContainer,
@@ -113,10 +57,29 @@ export type {
   ApiEphemeralActivityUpdate,
   ApiEphemeralUsageUpdate,
   ApiEphemeralMachineActivityUpdate,
+  GitHubProfile,
   EncryptedContent,
   VersionedValue,
   NullableVersionedValue,
-}
+} from '@happy/protocol'
+
+// Import only what's used locally for aliases
+import {
+  ApiUpdateContainerSchema,
+  type ApiUpdateContainer,
+  type ApiDeleteSession,
+  type ApiNewArtifact,
+  type ApiUpdateArtifact,
+  type ApiDeleteArtifact,
+  type ApiRelationshipUpdated,
+  type ApiNewFeedPost,
+  type ApiKvBatchUpdate,
+  type ApiUpdateMachineState,
+  type ApiEphemeralActivityUpdate,
+  type ApiEphemeralUsageUpdate,
+  type ApiEphemeralMachineActivityUpdate,
+  type ApiEphemeralUpdate,
+} from '@happy/protocol'
 
 // =============================================================================
 // LEGACY TYPE ALIASES (Deprecated - use Api* versions)
@@ -188,7 +151,7 @@ export const GitHubProfileSchema = z.object({
   avatar_url: z.string().optional(),
 }).passthrough()
 
-export type { GitHubProfile }
+// Note: GitHubProfile type is re-exported from @happy/protocol at the top of this file
 
 // =============================================================================
 // USAGE DATA TYPE FROM CLAUDE

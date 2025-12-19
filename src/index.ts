@@ -6,8 +6,12 @@
  * Simple argument parsing without any CLI framework dependencies
  */
 
-
 import chalk from 'chalk'
+import packageJson from '../package.json'
+
+// Export version to avoid "empty chunk" bundler warnings
+// This export is not used by the CLI itself but makes the package usable as a library
+export const VERSION = packageJson.version
 import { runClaude } from '@/claude/runClaude'
 import { parseCliArgs } from '@/parsers/cliArgs'
 import { validateStartedBy } from '@/utils/validators'
@@ -15,7 +19,6 @@ import { validateEnv } from '@/utils/validateEnv'
 import { logger } from './ui/logger'
 import { readCredentials, readDaemonState } from './persistence'
 import { authAndSetupMachineIfNeeded } from './ui/auth'
-import packageJson from '../package.json'
 import { startDaemon } from './daemon/run'
 import { checkIfDaemonRunningAndCleanupStaleState, isDaemonRunningCurrentlyInstalledHappyVersion, stopDaemon } from './daemon/controlClient'
 import { getLatestDaemonLog } from './ui/logger'
