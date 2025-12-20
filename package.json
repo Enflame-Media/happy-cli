@@ -106,12 +106,6 @@
     "typescript": "^5.9.3",
     "vitest": "^4.0.16"
   },
-  "resolutions": {
-    "whatwg-url": "15.1.0",
-    "parse-path": "7.0.3",
-    "@types/parse-path": "7.0.3",
-    "body-parser": "^2.2.1"
-  },
   "publishConfig": {
     "registry": "https://registry.npmjs.org"
   }
