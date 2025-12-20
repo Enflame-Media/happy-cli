@@ -15,8 +15,8 @@
 import { writeFileSync, chmodSync, existsSync } from 'fs';
 import { execSync } from 'child_process';
 import { logger } from '@/ui/logger';
-import { trimIdent } from '@/utils/trimIdent';
 import os from 'os';
+import plist from 'plist';
 
 const PLIST_LABEL = 'com.happy-cli.daemon';
 const PLIST_FILE = `/Library/LaunchDaemons/${PLIST_LABEL}.plist`;
@@ -35,45 +35,22 @@ export async function install(): Promise<void> {
         const happyPath = process.argv[0]; // Node.js executable
         const scriptPath = process.argv[1]; // Script path
 
-        // Create plist content
-        const plistContent = trimIdent(`
-            <?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-            <plist version="1.0">
-            <dict>
-                <key>Label</key>
-                <string>${PLIST_LABEL}</string>
-                
-                <key>ProgramArguments</key>
-                <array>
-                    <string>${happyPath}</string>
-                    <string>${scriptPath}</string>
-                    <string>happy-daemon</string>
-                </array>
-                
-                <key>EnvironmentVariables</key>
-                <dict>
-                    <key>HAPPY_DAEMON_MODE</key>
-                    <string>true</string>
-                </dict>
-                
-                <key>RunAtLoad</key>
-                <true/>
-                
-                <key>KeepAlive</key>
-                <true/>
-                
-                <key>StandardErrorPath</key>
-                <string>${os.homedir()}/.enfm-happy/daemon.err</string>
-                
-                <key>StandardOutPath</key>
-                <string>${os.homedir()}/.enfm-happy/daemon.log</string>
-                
-                <key>WorkingDirectory</key>
-                <string>/tmp</string>
-            </dict>
-            </plist>
-        `);
+        // Create plist data structure
+        const plistData = {
+            Label: PLIST_LABEL,
+            ProgramArguments: [happyPath, scriptPath, 'happy-daemon'],
+            EnvironmentVariables: {
+                HAPPY_DAEMON_MODE: 'true'
+            },
+            RunAtLoad: true,
+            KeepAlive: true,
+            StandardErrorPath: `${os.homedir()}/.enfm-happy/daemon.err`,
+            StandardOutPath: `${os.homedir()}/.enfm-happy/daemon.log`,
+            WorkingDirectory: '/tmp'
+        };
+
+        // Generate plist content using plist library
+        const plistContent = plist.build(plistData);
 
         // Write plist file
         writeFileSync(PLIST_FILE, plistContent);
