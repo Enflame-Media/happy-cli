@@ -13,7 +13,6 @@ function writeMessage(message) {
 }
 
 // Intercept fetch to track thinking state
-// Note: UUID interception removed - using deterministic session flow instead
 const originalFetch = global.fetch;
 
 // Guard for environments without global.fetch

@@ -8,7 +8,6 @@ import { run as runRipgrep } from '@/modules/ripgrep/index';
 import { run as runDifftastic } from '@/modules/difftastic/index';
 import { startHTTPDirectProxy, HTTPProxy } from '@/modules/proxy/index';
 import { RpcHandlerManager } from '../../api/rpc/RpcHandlerManager';
-import { withRetry } from '@/utils/retry';
 import { validatePath } from './pathSecurity';
 
 const execAsync = promisify(exec);
@@ -170,7 +169,7 @@ export interface SpawnSessionOptions {
     directory: string;
     sessionId?: string;
     approvedNewDirectoryCreation?: boolean;
-    agent?: 'claude' | 'codex';
+    agent?: 'claude' | 'codex' | 'gemini';
     token?: string;
 }
 
@@ -189,6 +188,14 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager, wor
     // Shell command handler - executes commands in the default shell
     rpcHandlerManager.registerHandler<BashRequest, BashResponse>('bash', async (data, _signal) => {
         logger.debug('Shell command request:', data.command);
+
+        // Validate cwd if provided
+        if (data.cwd) {
+            const validation = validatePath(data.cwd, workingDirectory);
+            if (!validation.valid) {
+                return { success: false, error: validation.error };
+            }
+        }
 
         try {
             // Validate and resolve cwd
@@ -253,10 +260,10 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager, wor
     rpcHandlerManager.registerHandler<ReadFileRequest, ReadFileResponse>('readFile', async (data, _signal) => {
         logger.debug('Read file request:', data.path);
 
-        // Validate path to prevent directory traversal
+        // Validate path is within working directory
         const validation = validatePath(data.path, workingDirectory);
         if (!validation.valid) {
-            return { success: false, error: validation.error || 'Invalid file path' };
+            return { success: false, error: validation.error };
         }
 
         try {
@@ -273,12 +280,11 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager, wor
     rpcHandlerManager.registerHandler<WriteFileRequest, WriteFileResponse>('writeFile', async (data, _signal) => {
         logger.debug('Write file request:', data.path);
 
-        // Validate path to prevent directory traversal
+        // Validate path is within working directory
         const validation = validatePath(data.path, workingDirectory);
         if (!validation.valid) {
-            return { success: false, error: validation.error || 'Invalid file path' };
+            return { success: false, error: validation.error };
         }
-        const filePath = validation.resolvedPath!;
 
         try {
             // If expectedHash is provided (not null), verify existing file
@@ -340,12 +346,11 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager, wor
     rpcHandlerManager.registerHandler<ListDirectoryRequest, ListDirectoryResponse>('listDirectory', async (data, _signal) => {
         logger.debug('List directory request:', data.path);
 
-        // Validate path to prevent directory traversal
+        // Validate path is within working directory
         const validation = validatePath(data.path, workingDirectory);
         if (!validation.valid) {
-            return { success: false, error: validation.error || 'Invalid directory path' };
+            return { success: false, error: validation.error };
         }
-        const dirPath = validation.resolvedPath!;
 
         try {
             const entries = await readdir(dirPath, { withFileTypes: true });
@@ -398,6 +403,12 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager, wor
     // Get directory tree handler - recursive with depth control
     rpcHandlerManager.registerHandler<GetDirectoryTreeRequest, GetDirectoryTreeResponse>('getDirectoryTree', async (data, _signal) => {
         logger.debug('Get directory tree request:', data.path, 'maxDepth:', data.maxDepth);
+
+        // Validate path is within working directory
+        const validation = validatePath(data.path, workingDirectory);
+        if (!validation.valid) {
+            return { success: false, error: validation.error };
+        }
 
         // Helper function to build tree recursively
         async function buildTree(path: string, name: string, currentDepth: number): Promise<TreeNode | null> {
@@ -488,16 +499,11 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager, wor
         logger.debug('Ripgrep request with args:', data.args, 'cwd:', data.cwd);
 
         // Validate cwd if provided
-        let cwd = workingDirectory;
         if (data.cwd) {
             const validation = validatePath(data.cwd, workingDirectory);
             if (!validation.valid) {
-                return {
-                    success: false,
-                    error: validation.error || 'Invalid working directory path'
-                };
+                return { success: false, error: validation.error };
             }
-            cwd = validation.resolvedPath!;
         }
 
         try {
@@ -522,16 +528,11 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager, wor
         logger.debug('Difftastic request with args:', data.args, 'cwd:', data.cwd);
 
         // Validate cwd if provided
-        let cwd = workingDirectory;
         if (data.cwd) {
             const validation = validatePath(data.cwd, workingDirectory);
             if (!validation.valid) {
-                return {
-                    success: false,
-                    error: validation.error || 'Invalid working directory path'
-                };
+                return { success: false, error: validation.error };
             }
-            cwd = validation.resolvedPath!;
         }
 
         try {

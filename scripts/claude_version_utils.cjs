@@ -9,33 +9,12 @@
  *    - macOS/Linux: curl -fsSL https://claude.ai/install.sh | bash
  *    - PowerShell:  irm https://claude.ai/install.ps1 | iex
  *    - Windows CMD: curl -fsSL https://claude.ai/install.cmd | cmd
- *
- * Security Note: This module uses execFileSync instead of execSync to prevent
- * shell injection vulnerabilities. All commands are hardcoded with no user input.
  */
 
-const { execFileSync } = require('child_process');
+const { execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-
-/**
- * Safely execute a command and return output
- * Uses execFileSync for security (no shell injection possible)
- * @param {string} command - Command to execute
- * @param {string[]} args - Arguments array
- * @returns {string|null} Output string or null on error
- */
-function safeExec(command, args = []) {
-    try {
-        return execFileSync(command, args, {
-            encoding: 'utf8',
-            stdio: ['pipe', 'pipe', 'pipe']
-        }).trim();
-    } catch (e) {
-        return null;
-    }
-}
 
 /**
  * Safely resolve symlink or return path if it exists
@@ -57,12 +36,14 @@ function resolvePathSafe(filePath) {
  * @returns {string|null} Path to cli.js or null if not found
  */
 function findNpmGlobalCliPath() {
-    const globalRoot = safeExec('npm', ['root', '-g']);
-    if (!globalRoot) return null;
-
-    const globalCliPath = path.join(globalRoot, '@anthropic-ai', 'claude-code', 'cli.js');
-    if (fs.existsSync(globalCliPath)) {
-        return globalCliPath;
+    try {
+        const globalRoot = execSync('npm root -g', { encoding: 'utf8' }).trim();
+        const globalCliPath = path.join(globalRoot, '@anthropic-ai', 'claude-code', 'cli.js');
+        if (fs.existsSync(globalCliPath)) {
+            return globalCliPath;
+        }
+    } catch (e) {
+        // npm root -g failed
     }
     return null;
 }
@@ -75,16 +56,21 @@ function findHomebrewCliPath() {
     if (process.platform !== 'darwin' && process.platform !== 'linux') {
         return null;
     }
-
+    
     // Try to get Homebrew prefix via command first
-    const brewPrefix = safeExec('brew', ['--prefix']);
-
+    let brewPrefix = null;
+    try {
+        brewPrefix = execSync('brew --prefix 2>/dev/null', { encoding: 'utf8' }).trim();
+    } catch (e) {
+        // brew command not in PATH, try standard locations
+    }
+    
     // Standard Homebrew locations to check
     const possiblePrefixes = [];
     if (brewPrefix) {
         possiblePrefixes.push(brewPrefix);
     }
-
+    
     // Add standard locations based on platform
     if (process.platform === 'darwin') {
         // macOS: Intel (/usr/local) or Apple Silicon (/opt/homebrew)
@@ -94,65 +80,61 @@ function findHomebrewCliPath() {
         const homeDir = os.homedir();
         possiblePrefixes.push('/home/linuxbrew/.linuxbrew', path.join(homeDir, '.linuxbrew'));
     }
-
+    
     // Check each possible prefix
     for (const prefix of possiblePrefixes) {
         if (!fs.existsSync(prefix)) {
             continue;
         }
-
+        
         // Homebrew installs claude-code as a Cask (binary) in Caskroom
         const caskroomPath = path.join(prefix, 'Caskroom', 'claude-code');
         if (fs.existsSync(caskroomPath)) {
             const found = findLatestVersionBinary(caskroomPath, 'claude');
             if (found) return found;
         }
-
+        
         // Also check Cellar (for formula installations, though claude-code is usually a Cask)
         const cellarPath = path.join(prefix, 'Cellar', 'claude-code');
         if (fs.existsSync(cellarPath)) {
             // Cellar has different structure - check for cli.js in libexec
-            try {
-                const entries = fs.readdirSync(cellarPath);
-                if (entries.length > 0) {
-                    const sorted = entries.sort((a, b) => compareVersions(b, a));
-                    const latestVersion = sorted[0];
-                    const cliPath = path.join(cellarPath, latestVersion, 'libexec', 'lib', 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js');
-                    if (fs.existsSync(cliPath)) {
-                        return cliPath;
-                    }
+            const entries = fs.readdirSync(cellarPath);
+            if (entries.length > 0) {
+                const sorted = entries.sort((a, b) => compareVersions(b, a));
+                const latestVersion = sorted[0];
+                const cliPath = path.join(cellarPath, latestVersion, 'libexec', 'lib', 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js');
+                if (fs.existsSync(cliPath)) {
+                    return cliPath;
                 }
-            } catch (e) {
-                // Directory read failed
             }
         }
-
+        
         // Check bin directory for symlink (most reliable)
         const binPath = path.join(prefix, 'bin', 'claude');
         const resolvedBinPath = resolvePathSafe(binPath);
         if (resolvedBinPath) return resolvedBinPath;
     }
-
+    
     return null;
 }
 
 /**
  * Find path to native installer Claude Code CLI
- *
+ * 
  * Installation locations:
  * - macOS/Linux: ~/.local/bin/claude (symlink) -> ~/.local/share/claude/versions/<version>
  * - Windows: %LOCALAPPDATA%\Claude\ or %USERPROFILE%\.claude\
  * - Legacy: ~/.claude/local/
- *
+ * 
  * @returns {string|null} Path to cli.js or binary, or null if not found
  */
 function findNativeInstallerCliPath() {
     const homeDir = os.homedir();
-
+    
     // Windows-specific locations
     if (process.platform === 'win32') {
         const localAppData = process.env.LOCALAPPDATA || path.join(homeDir, 'AppData', 'Local');
-
+        
         // Check %LOCALAPPDATA%\Claude\
         const windowsClaudePath = path.join(localAppData, 'Claude');
         if (fs.existsSync(windowsClaudePath)) {
@@ -162,20 +144,20 @@ function findNativeInstallerCliPath() {
                 const found = findLatestVersionBinary(versionsDir);
                 if (found) return found;
             }
-
+            
             // Check for claude.exe directly
             const exePath = path.join(windowsClaudePath, 'claude.exe');
             if (fs.existsSync(exePath)) {
                 return exePath;
             }
-
+            
             // Check for cli.js
             const cliPath = path.join(windowsClaudePath, 'cli.js');
             if (fs.existsSync(cliPath)) {
                 return cliPath;
             }
         }
-
+        
         // Check %USERPROFILE%\.claude\ (alternative Windows location)
         const dotClaudePath = path.join(homeDir, '.claude');
         if (fs.existsSync(dotClaudePath)) {
@@ -184,35 +166,26 @@ function findNativeInstallerCliPath() {
                 const found = findLatestVersionBinary(versionsDir);
                 if (found) return found;
             }
-
+            
             const exePath = path.join(dotClaudePath, 'claude.exe');
             if (fs.existsSync(exePath)) {
                 return exePath;
             }
         }
-
-        // Try 'where' command as fallback for Windows
-        const wherePath = safeExec('where', ['claude']);
-        if (wherePath) {
-            const firstPath = wherePath.split('\n')[0].trim();
-            if (firstPath && fs.existsSync(firstPath)) {
-                return firstPath;
-            }
-        }
     }
-
+    
     // Check ~/.local/bin/claude symlink (most common location on macOS/Linux)
     const localBinPath = path.join(homeDir, '.local', 'bin', 'claude');
     const resolvedLocalBinPath = resolvePathSafe(localBinPath);
     if (resolvedLocalBinPath) return resolvedLocalBinPath;
-
+    
     // Check ~/.local/share/claude/versions/ (native installer location)
     const versionsDir = path.join(homeDir, '.local', 'share', 'claude', 'versions');
     if (fs.existsSync(versionsDir)) {
         const found = findLatestVersionBinary(versionsDir);
         if (found) return found;
     }
-
+    
     // Check ~/.claude/local/ (older installation method)
     const nativeBasePath = path.join(homeDir, '.claude', 'local');
     if (fs.existsSync(nativeBasePath)) {
@@ -221,22 +194,14 @@ function findNativeInstallerCliPath() {
         if (fs.existsSync(cliPath)) {
             return cliPath;
         }
-
+        
         // Alternative: direct cli.js in the installation
         const directCliPath = path.join(nativeBasePath, 'cli.js');
         if (fs.existsSync(directCliPath)) {
             return directCliPath;
         }
     }
-
-    // Try 'which' command as fallback for Unix-like systems
-    if (process.platform !== 'win32') {
-        const whichPath = safeExec('which', ['claude']);
-        if (whichPath && fs.existsSync(whichPath)) {
-            return resolvePathSafe(whichPath) || whichPath;
-        }
-    }
-
+    
     return null;
 }
 
@@ -250,12 +215,12 @@ function findLatestVersionBinary(versionsDir, binaryName = null) {
     try {
         const entries = fs.readdirSync(versionsDir);
         if (entries.length === 0) return null;
-
+        
         // Sort using semver comparison (descending)
         const sorted = entries.sort((a, b) => compareVersions(b, a));
         const latestVersion = sorted[0];
         const versionPath = path.join(versionsDir, latestVersion);
-
+        
         // Check if it's a file (binary) or directory
         const stat = fs.statSync(versionPath);
         if (stat.isFile()) {
@@ -315,60 +280,25 @@ function findGlobalClaudeCliPath() {
  */
 function getVersion(cliPath) {
     try {
-        // For .js files, look for package.json in same or parent directory
         const pkgPath = path.join(path.dirname(cliPath), 'package.json');
         if (fs.existsSync(pkgPath)) {
             const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
             return pkg.version;
         }
-        // Try parent directory (common for node_modules structure)
-        const parentPkgPath = path.join(path.dirname(path.dirname(cliPath)), 'package.json');
-        if (fs.existsSync(parentPkgPath)) {
-            const pkg = JSON.parse(fs.readFileSync(parentPkgPath, 'utf8'));
-            if (pkg.name === '@anthropic-ai/claude-code') {
-                return pkg.version;
-            }
-        }
-    } catch (e) {
-        // Ignore errors
-    }
+    } catch (e) {}
     return null;
 }
 
 /**
- * Parse version string into numeric parts
- * Handles semver-like strings (e.g., "1.2.3", "1.2.3-beta.1")
- * @param {string} version - Version string
- * @returns {number[]} Array of numeric parts [major, minor, patch]
- */
-function parseVersion(version) {
-    if (!version || typeof version !== 'string') {
-        return [0, 0, 0];
-    }
-    // Remove any pre-release suffix (e.g., "-beta.1")
-    const basePart = version.split('-')[0];
-    const parts = basePart.split('.').map(p => {
-        const num = parseInt(p, 10);
-        return Number.isNaN(num) ? 0 : num;
-    });
-    // Ensure we have at least 3 parts
-    while (parts.length < 3) {
-        parts.push(0);
-    }
-    return parts.slice(0, 3);
-}
-
-/**
  * Compare semver versions
- * Fixed to handle non-semver strings properly (returns 0 instead of NaN)
  * @param {string} a - First version
  * @param {string} b - Second version
- * @returns {number} 1 if a > b, -1 if a < b, 0 if equal or incomparable
+ * @returns {number} 1 if a > b, -1 if a < b, 0 if equal
  */
 function compareVersions(a, b) {
-    const partsA = parseVersion(a);
-    const partsB = parseVersion(b);
-
+    if (!a || !b) return 0;
+    const partsA = a.split('.').map(Number);
+    const partsB = b.split('.').map(Number);
     for (let i = 0; i < 3; i++) {
         if (partsA[i] > partsB[i]) return 1;
         if (partsA[i] < partsB[i]) return -1;
@@ -407,26 +337,19 @@ function getClaudeCliPath() {
 
 /**
  * Run Claude CLI, handling both JavaScript and binary files
- * Added proper error handling for dynamic import to prevent unhandled promise rejections
  * @param {string} cliPath - Path to CLI (from getClaudeCliPath)
  */
 function runClaudeCli(cliPath) {
     const { pathToFileURL } = require('url');
     const { spawn } = require('child_process');
-
+    
     // Check if it's a JavaScript file (.js or .cjs) or a binary file
-    const isJsFile = cliPath.endsWith('.js') || cliPath.endsWith('.cjs') || cliPath.endsWith('.mjs');
+    const isJsFile = cliPath.endsWith('.js') || cliPath.endsWith('.cjs');
 
     if (isJsFile) {
         // JavaScript file - use import to keep interceptors working
         const importUrl = pathToFileURL(cliPath).href;
-        import(importUrl).catch((error) => {
-            console.error('\x1b[31mFailed to load Claude Code CLI:\x1b[0m', error.message);
-            if (error.code === 'ERR_MODULE_NOT_FOUND') {
-                console.error('\x1b[90mThe Claude Code installation may be corrupted. Try reinstalling.\x1b[0m');
-            }
-            process.exit(1);
-        });
+        import(importUrl);
     } else {
         // Binary file (e.g., Homebrew installation) - spawn directly
         // Note: Interceptors won't work with binary files, but that's acceptable
@@ -434,12 +357,7 @@ function runClaudeCli(cliPath) {
         const args = process.argv.slice(2);
         const child = spawn(cliPath, args, {
             stdio: 'inherit',
-            env: process.env,
-            shell: process.platform === 'win32' // Use shell on Windows for proper path handling
-        });
-        child.on('error', (error) => {
-            console.error('\x1b[31mFailed to start Claude Code:\x1b[0m', error.message);
-            process.exit(1);
+            env: process.env
         });
         child.on('exit', (code) => {
             process.exit(code || 0);
@@ -453,8 +371,8 @@ module.exports = {
     findHomebrewCliPath,
     findNativeInstallerCliPath,
     getVersion,
-    parseVersion,
     compareVersions,
     getClaudeCliPath,
     runClaudeCli
 };
+

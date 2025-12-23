@@ -39,8 +39,8 @@ export class PushNotificationClient {
             )
 
             logger.debug(`Fetched ${response.data.tokens.length} push tokens`)
-
-            // Log token metadata (not the actual tokens for security)
+            
+            // Log token information
             response.data.tokens.forEach((token, index) => {
                 logger.debug(`[PUSH] Token ${index + 1}: id=${token.id}, created=${new Date(token.createdAt).toISOString()}, updated=${new Date(token.updatedAt).toISOString()}`)
             })
@@ -138,16 +138,37 @@ export class PushNotificationClient {
      */
     async sendToAllDevices(title: string, body: string, data?: Record<string, any>): Promise<void> {
         logger.debug(`[PUSH] sendToAllDevices called with title: "${title}", body: "${body}"`);
+        
+        // Execute async operations without awaiting
+        (async () => {
+            try {
+                // Fetch all push tokens
+                logger.debug('[PUSH] Fetching push tokens...')
+                const tokens = await this.fetchPushTokens()
+                logger.debug(`[PUSH] Fetched ${tokens.length} push tokens`)
+                
+                // Log token details for debugging
+                tokens.forEach((token, index) => {
+                    logger.debug(`[PUSH] Using token ${index + 1}: id=${token.id}`)
+                })
 
         // Fetch all push tokens
         logger.debug('[PUSH] Fetching push tokens...')
         const tokens = await this.fetchPushTokens()
         logger.debug(`[PUSH] Fetched ${tokens.length} push tokens`)
 
-        // Log token metadata for debugging (not the actual tokens for security)
-        tokens.forEach((token, index) => {
-            logger.debug(`[PUSH] Using token ${index + 1}: id=${token.id}`)
-        })
+                // Create messages for all tokens
+                const messages: ExpoPushMessage[] = tokens.map((token, index) => {
+                    logger.debug(`[PUSH] Creating message ${index + 1} for token`)
+                    return {
+                        to: token.token,
+                        title,
+                        body,
+                        data,
+                        sound: 'default',
+                        priority: 'high'
+                    }
+                })
 
         if (tokens.length === 0) {
             logger.debug('No push tokens found for user')

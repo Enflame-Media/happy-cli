@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync, spawnSync } from 'child_process';
+import { execSync } from "child_process";
 
 /**
  * Generate release notes using Claude Code by analyzing git commits
@@ -10,11 +10,13 @@ import { execFileSync, spawnSync } from 'child_process';
  * Prompt is passed via stdin to claude to avoid shell escaping issues.
  */
 
-const [,, fromTag, toVersion] = process.argv;
+const [, , fromTag, toVersion] = process.argv;
 
 if (!fromTag || !toVersion) {
-    console.error('Usage: node scripts/generate-release-notes.js <from-tag> <to-version>');
-    process.exit(1);
+  console.error(
+    "Usage: node scripts/generate-release-notes.js <from-tag> <to-version>"
+  );
+  process.exit(1);
 }
 
 // Validate fromTag to prevent path traversal or unexpected values
@@ -25,47 +27,34 @@ if (fromTag !== 'null' && !/^[a-zA-Z0-9._-]+$/.test(fromTag)) {
 }
 
 async function generateReleaseNotes() {
+  try {
+    // Get commit range for the release
+    const commitRange =
+      fromTag === "null" || !fromTag ? "--all" : `${fromTag}..HEAD`;
+
+    // Get git log for the commits
+    let gitLog;
     try {
-        // Get git log for the commits using execFileSync (no shell injection possible)
-        let gitLog;
-        const logFormat = '%h - %s (%an, %ar)';
+      gitLog = execSync(
+        `git log ${commitRange} --pretty=format:"%h - %s (%an, %ar)" --no-merges`,
+        { encoding: "utf8" }
+      );
+    } catch (error) {
+      // Fallback to recent commits if tag doesn't exist
+      console.error(`Tag ${fromTag} not found, using recent commits instead`);
+      gitLog = execSync(
+        `git log -10 --pretty=format:"%h - %s (%an, %ar)" --no-merges`,
+        { encoding: "utf8" }
+      );
+    }
 
-        try {
-            if (fromTag === 'null' || !fromTag) {
-                // Get all commits
-                gitLog = execFileSync('git', [
-                    'log',
-                    '--all',
-                    `--pretty=format:${logFormat}`,
-                    '--no-merges'
-                ], { encoding: 'utf8' });
-            } else {
-                // Get commits since tag
-                gitLog = execFileSync('git', [
-                    'log',
-                    `${fromTag}..HEAD`,
-                    `--pretty=format:${logFormat}`,
-                    '--no-merges'
-                ], { encoding: 'utf8' });
-            }
-        } catch (_error) {
-            // Fallback to recent commits if tag doesn't exist
-            console.error(`Tag ${fromTag} not found, using recent commits instead`);
-            gitLog = execFileSync('git', [
-                'log',
-                '-10',
-                `--pretty=format:${logFormat}`,
-                '--no-merges'
-            ], { encoding: 'utf8' });
-        }
+    if (!gitLog.trim()) {
+      console.error("No commits found for release notes generation");
+      process.exit(1);
+    }
 
-        if (!gitLog.trim()) {
-            console.error('No commits found for release notes generation');
-            process.exit(1);
-        }
-
-        // Create a prompt for Claude to analyze commits and generate release notes
-        const prompt = `Please analyze these git commits and generate professional release notes for version ${toVersion} of the Happy CLI tool (a Claude Code session sharing CLI).
+    // Create a prompt for Claude to analyze commits and generate release notes
+    const prompt = `Please analyze these git commits and generate professional release notes for version ${toVersion} of the Happy CLI tool (a Claude Code session sharing CLI).
 
 Git commits:
 ${gitLog}
@@ -87,37 +76,20 @@ Please format the output as markdown with:
 
 Do not include any preamble or explanations, just return the markdown release notes.`;
 
-        // Call Claude Code to generate release notes
-        // Use spawnSync with stdin to avoid command injection from prompt content
-        console.error('Generating release notes with Claude Code...');
+    // Call Claude Code to generate release notes
+    console.error("Generating release notes with Claude Code...");
+    const releaseNotes = execSync(`claude --add-dir . --print "${prompt}"`, {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "inherit"],
+      maxBuffer: 1024 * 1024 * 10, // 10MB buffer
+    });
 
-        const result = spawnSync('claude', [
-            '--add-dir', '.',
-            '--print',
-            '-'  // Read prompt from stdin
-        ], {
-            input: prompt,
-            encoding: 'utf8',
-            stdio: ['pipe', 'pipe', 'inherit'],
-            maxBuffer: 1024 * 1024 * 10 // 10MB buffer
-        });
-
-        if (result.error) {
-            throw result.error;
-        }
-
-        if (result.status !== 0) {
-            console.error('Claude Code exited with non-zero status:', result.status);
-            process.exit(1);
-        }
-
-        // Output release notes to stdout for release-it to use
-        console.log(result.stdout.trim());
-
-    } catch (error) {
-        console.error('Error generating release notes:', error.message);
-        process.exit(1);
-    }
+    // Output release notes to stdout for release-it to use
+    console.log(releaseNotes.trim());
+  } catch (error) {
+    console.error("Error generating release notes:", error.message);
+    process.exit(1);
+  }
 }
 
 generateReleaseNotes();

@@ -101,7 +101,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
             encryptionVariant: this.encryptionVariant,
             logger: (msg, data) => logger.debug(msg, data)
         });
-        registerCommonHandlers(this.rpcHandlerManager, this.metadata?.path ?? process.cwd());
+        registerCommonHandlers(this.rpcHandlerManager, this.metadata.path);
 
         //
         // Create WebSocket with optimized connection options
@@ -377,7 +377,6 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
         });
 
         // Track usage from assistant messages
-        // Note: message is optional to support synthetic/error formats
         if (body.type === 'assistant' && body.message?.usage) {
             try {
                 // Extract model from message if available (model is passed through by zod's .passthrough())
@@ -420,6 +419,41 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                 sentFrom: 'cli'
             }
         };
+        const encrypted = encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, content));
+        
+        // Check if socket is connected before sending
+        if (!this.socket.connected) {
+            logger.debug('[API] Socket not connected, cannot send message. Message will be lost:', { type: body.type });
+            // TODO: Consider implementing message queue or HTTP fallback for reliability
+        }
+        
+        this.socket.emit('message', {
+            sid: this.sessionId,
+            message: encrypted
+        });
+    }
+
+    /**
+     * Send a generic agent message to the session.
+     * Works for any agent type (Gemini, Codex, Claude, etc.)
+     * 
+     * @param agentType - The type of agent sending the message (e.g., 'gemini', 'codex', 'claude')
+     * @param body - The message payload
+     */
+    sendAgentMessage(agentType: 'gemini' | 'codex' | 'claude' | 'opencode', body: any) {
+        let content = {
+            role: 'agent',
+            content: {
+                type: agentType,
+                data: body
+            },
+            meta: {
+                sentFrom: 'cli'
+            }
+        };
+        
+        logger.debug(`[SOCKET] Sending ${agentType} message:`, { type: body.type, hasMessage: !!body.message });
+        
         const encrypted = encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, content));
         this.socket.emit('message', {
             sid: this.sessionId,

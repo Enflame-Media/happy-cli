@@ -80,10 +80,10 @@ describe('sessionScanner', () => {
 
 
     expect(collectedMessages).toHaveLength(2)
-    const msg1 = collectedMessages[1];
-    expect(msg1.type).toBe('assistant')
-    // Type assertion safe here because we just checked the type
-    expect(((msg1 as any).message.content as any)[0].text).toBe('lol')
+    expect(collectedMessages[1].type).toBe('assistant')
+    if (collectedMessages[1].type === 'assistant' && collectedMessages[1].message) {
+      expect((collectedMessages[1].message.content as any)[0].text).toBe('lol')
+    }
     
     // PHASE 2: Resumed session (1-continue-run-ls-tool.jsonl)
     const fixture2 = await readFile(join(__dirname, '__fixtures__', '1-continue-run-ls-tool.jsonl'), 'utf-8')
@@ -139,10 +139,11 @@ describe('sessionScanner', () => {
     // Verify last message is assistant with the file listing
     const lastAssistantMsg = collectedMessages[collectedMessages.length - 1]
     expect(lastAssistantMsg.type).toBe('assistant')
-    // Type assertion safe here because we just checked the type
-    const lastContent = ((lastAssistantMsg as any).message.content as any)[0].text
-    expect(lastContent).toContain('0-say-lol-session.jsonl')
-    expect(lastContent).toContain('readme.md')
+    if (lastAssistantMsg.type === 'assistant' && lastAssistantMsg.message?.content) {
+      const content = (lastAssistantMsg.message.content as any)[0].text
+      expect(content).toContain('0-say-lol-session.jsonl')
+      expect(content).toContain('readme.md')
+    }
   })
   
   it.todo('should not process duplicate assistant messages with same message ID');

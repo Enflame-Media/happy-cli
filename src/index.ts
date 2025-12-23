@@ -59,6 +59,10 @@ import { initializeTelemetry, showTelemetryNoticeIfNeeded } from './telemetry'
 
   // Check if first argument is a subcommand
   const subcommand = args[0]
+  
+  // Log which subcommand was detected (for debugging)
+  if (!args.includes('--version')) {
+  }
 
   if (subcommand === 'doctor') {
     // Check for clean subcommand
@@ -118,6 +122,137 @@ import { initializeTelemetry, showTelemetryNoticeIfNeeded } from './telemetry'
       // Do not force exit here; allow instrumentation to show lingering handles
     } catch (error) {
       logger.errorAndExit('Codex command failed', error)
+    }
+    return;
+  } else if (subcommand === 'gemini') {
+    // Handle gemini subcommands
+    const geminiSubcommand = args[1];
+    
+    // Handle "happy gemini model set <model>" command
+    if (geminiSubcommand === 'model' && args[2] === 'set' && args[3]) {
+      const modelName = args[3];
+      const validModels = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+      
+      if (!validModels.includes(modelName)) {
+        console.error(`Invalid model: ${modelName}`);
+        console.error(`Available models: ${validModels.join(', ')}`);
+        process.exit(1);
+      }
+      
+      try {
+        const { existsSync, readFileSync, writeFileSync, mkdirSync } = require('fs');
+        const { join } = require('path');
+        const { homedir } = require('os');
+        
+        const configDir = join(homedir(), '.gemini');
+        const configPath = join(configDir, 'config.json');
+        
+        // Create directory if it doesn't exist
+        if (!existsSync(configDir)) {
+          mkdirSync(configDir, { recursive: true });
+        }
+        
+        // Read existing config or create new one
+        let config: any = {};
+        if (existsSync(configPath)) {
+          try {
+            config = JSON.parse(readFileSync(configPath, 'utf-8'));
+          } catch (error) {
+            // Ignore parse errors, start fresh
+            config = {};
+          }
+        }
+        
+        // Update model in config
+        config.model = modelName;
+        
+        // Write config back
+        writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+        console.log(`✓ Model set to: ${modelName}`);
+        console.log(`  Config saved to: ${configPath}`);
+        console.log(`  This model will be used in future sessions.`);
+        process.exit(0);
+      } catch (error) {
+        console.error('Failed to save model configuration:', error);
+        process.exit(1);
+      }
+    }
+    
+    // Handle "happy gemini model get" command
+    if (geminiSubcommand === 'model' && args[2] === 'get') {
+      try {
+        const { existsSync, readFileSync } = require('fs');
+        const { join } = require('path');
+        const { homedir } = require('os');
+        
+        const configPaths = [
+          join(homedir(), '.gemini', 'config.json'),
+          join(homedir(), '.config', 'gemini', 'config.json'),
+        ];
+        
+        let model: string | null = null;
+        for (const configPath of configPaths) {
+          if (existsSync(configPath)) {
+            try {
+              const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+              model = config.model || config.GEMINI_MODEL || null;
+              if (model) break;
+            } catch (error) {
+              // Ignore parse errors
+            }
+          }
+        }
+        
+        if (model) {
+          console.log(`Current model: ${model}`);
+        } else if (process.env.GEMINI_MODEL) {
+          console.log(`Current model: ${process.env.GEMINI_MODEL} (from GEMINI_MODEL env var)`);
+        } else {
+          console.log('Current model: gemini-2.5-pro (default)');
+        }
+        process.exit(0);
+      } catch (error) {
+        console.error('Failed to read model configuration:', error);
+        process.exit(1);
+      }
+    }
+    
+    // Handle gemini command (ACP-based agent)
+    try {
+      const { runGemini } = await import('@/gemini/runGemini');
+      
+      // Parse startedBy argument
+      let startedBy: 'daemon' | 'terminal' | undefined = undefined;
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === '--started-by') {
+          startedBy = args[++i] as 'daemon' | 'terminal';
+        }
+      }
+      
+      const {
+        credentials
+      } = await authAndSetupMachineIfNeeded();
+
+      // Auto-start daemon for gemini (same as claude)
+      logger.debug('Ensuring Happy background service is running & matches our version...');
+      if (!(await isDaemonRunningCurrentlyInstalledHappyVersion())) {
+        logger.debug('Starting Happy background service...');
+        const daemonProcess = spawnHappyCLI(['daemon', 'start-sync'], {
+          detached: true,
+          stdio: 'ignore',
+          env: process.env
+        });
+        daemonProcess.unref();
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+
+      await runGemini({credentials, startedBy});
+    } catch (error) {
+      console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
+      if (process.env.DEBUG) {
+        console.error(error)
+      }
+      process.exit(1)
     }
     return;
   } else if (subcommand === 'logout') {
@@ -356,10 +491,56 @@ ${chalk.gray(`Last checked: ${new Date(health.timestamp).toLocaleString()}`)}
     // Parse command line arguments
     const { options, showHelp, showVersion, verbose } = parseCliArgs(args)
 
-    // Enable verbose output if --verbose flag is present
-    // This sets DEBUG=1 which enables detailed logging throughout the codebase
-    if (verbose) {
-      process.env.DEBUG = '1'
+    // Parse command line arguments for main command
+    const options: StartOptions = {}
+    let showHelp = false
+    let showVersion = false
+    const unknownArgs: string[] = [] // Collect unknown args to pass through to claude
+
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i]
+
+      if (arg === '-h' || arg === '--help') {
+        showHelp = true
+        // Also pass through to claude
+        unknownArgs.push(arg)
+      } else if (arg === '-v' || arg === '--version') {
+        showVersion = true
+        // Also pass through to claude (will show after our version)
+        unknownArgs.push(arg)
+      } else if (arg === '--happy-starting-mode') {
+        options.startingMode = z.enum(['local', 'remote']).parse(args[++i])
+      } else if (arg === '--yolo') {
+        // Shortcut for --dangerously-skip-permissions
+        unknownArgs.push('--dangerously-skip-permissions')
+      } else if (arg === '--started-by') {
+        options.startedBy = args[++i] as 'daemon' | 'terminal'
+      } else if (arg === '--claude-env') {
+        // Parse KEY=VALUE environment variable to pass to Claude
+        const envArg = args[++i]
+        if (envArg && envArg.includes('=')) {
+          const eqIndex = envArg.indexOf('=')
+          const key = envArg.substring(0, eqIndex)
+          const value = envArg.substring(eqIndex + 1)
+          options.claudeEnvVars = options.claudeEnvVars || {}
+          options.claudeEnvVars[key] = value
+        } else {
+          console.error(chalk.red(`Invalid --claude-env format: ${envArg}. Expected KEY=VALUE`))
+          process.exit(1)
+        }
+      } else {
+        // Pass unknown arguments through to claude
+        unknownArgs.push(arg)
+        // Check if this arg expects a value (simplified check for common patterns)
+        if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
+          unknownArgs.push(args[++i])
+        }
+      }
+    }
+
+    // Add unknown args to claudeArgs
+    if (unknownArgs.length > 0) {
+      options.claudeArgs = [...(options.claudeArgs || []), ...unknownArgs]
     }
 
     // Show help
@@ -367,6 +548,35 @@ ${chalk.gray(`Last checked: ${new Date(health.timestamp).toLocaleString()}`)}
       // Use auto-generated help text from command registry
       console.log(generateMainHelp())
 
+${chalk.bold('Usage:')}
+  happy [options]         Start Claude with mobile control
+  happy auth              Manage authentication
+  happy codex             Start Codex mode
+  happy gemini            Start Gemini mode (ACP)
+  happy connect           Connect AI vendor API keys
+  happy notify            Send push notification
+  happy daemon            Manage background service that allows
+                            to spawn new sessions away from your computer
+  happy doctor            System diagnostics & troubleshooting
+
+${chalk.bold('Examples:')}
+  happy                    Start session
+  happy --yolo             Start with bypassing permissions
+                            happy sugar for --dangerously-skip-permissions
+  happy --claude-env ANTHROPIC_BASE_URL=http://127.0.0.1:3456
+                           Use a custom API endpoint (e.g., claude-code-router)
+  happy auth login --force Authenticate
+  happy doctor             Run diagnostics
+
+${chalk.bold('Happy supports ALL Claude options!')}
+  Use any claude flag with happy as you would with claude. Our favorite:
+
+  happy --resume
+
+${chalk.gray('─'.repeat(60))}
+${chalk.bold.cyan('Claude Code Options (from `claude --help`):')}
+`)
+      
       // Run claude --help and display its output
       // Use execFileSync with the current Node executable for cross-platform compatibility
       try {
