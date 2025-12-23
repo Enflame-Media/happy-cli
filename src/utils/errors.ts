@@ -27,9 +27,12 @@
  */
 import axios from 'axios'
 
-// Re-export AppError and types from shared package
-export { AppError } from '@happy/errors'
-export type { AppErrorOptions, AppErrorJSON } from '@happy/errors'
+// Re-export AppError, ErrorCodes, and types from shared package
+export { AppError, ErrorCodes } from '@happy/errors'
+export type { AppErrorOptions, AppErrorJSON, ErrorCode } from '@happy/errors'
+
+// Import ErrorCode type for local use in this module
+import type { ErrorCode } from '@happy/errors'
 
 /**
  * Base URL for error documentation.
@@ -84,62 +87,8 @@ export function getErrorDocUrl(code: string): string | undefined {
   return docPath ? `${ERROR_DOCS_BASE}/${docPath}` : undefined
 }
 
-/**
- * Standardized error codes for the CLI application.
- * These codes provide programmatic error identification and consistent categorization.
- *
- * @example
- * ```typescript
- * throw new AppError(ErrorCodes.AUTH_FAILED, 'Authentication token expired');
- * ```
- */
-export const ErrorCodes = {
-  // Connection/Network errors
-  CONNECT_FAILED: 'CONNECT_FAILED',
-  NO_RESPONSE: 'NO_RESPONSE',
-  REQUEST_CONFIG_ERROR: 'REQUEST_CONFIG_ERROR',
-
-  // Authentication errors
-  AUTH_FAILED: 'AUTH_FAILED',
-  TOKEN_EXCHANGE_FAILED: 'TOKEN_EXCHANGE_FAILED',
-
-  // Session/Process errors
-  SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
-  DAEMON_START_FAILED: 'DAEMON_START_FAILED',
-  PROCESS_TIMEOUT: 'PROCESS_TIMEOUT',
-  VERSION_MISMATCH: 'VERSION_MISMATCH',
-
-  // Resource errors
-  LOCK_ACQUISITION_FAILED: 'LOCK_ACQUISITION_FAILED',
-  DIRECTORY_REQUIRED: 'DIRECTORY_REQUIRED',
-  RESOURCE_NOT_FOUND: 'RESOURCE_NOT_FOUND',
-
-  // Encryption errors
-  ENCRYPTION_ERROR: 'ENCRYPTION_ERROR',
-  NONCE_TOO_SHORT: 'NONCE_TOO_SHORT',
-
-  // Validation errors
-  INVALID_INPUT: 'INVALID_INPUT',
-  VALIDATION_FAILED: 'VALIDATION_FAILED',
-
-  // Operation errors
-  OPERATION_CANCELLED: 'OPERATION_CANCELLED',
-  OPERATION_FAILED: 'OPERATION_FAILED',
-  UNSUPPORTED_OPERATION: 'UNSUPPORTED_OPERATION',
-
-  // Queue/Stream errors
-  QUEUE_CLOSED: 'QUEUE_CLOSED',
-  ALREADY_STARTED: 'ALREADY_STARTED',
-
-  // Generic errors
-  INTERNAL_ERROR: 'INTERNAL_ERROR',
-  UNKNOWN_ERROR: 'UNKNOWN_ERROR',
-} as const
-
-/**
- * Type representing valid error codes from the ErrorCodes constant.
- */
-export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes]
+// ErrorCodes and ErrorCode type are now imported from @happy/errors above.
+// This provides unified error codes across all Happy projects (CLI, App, Server).
 
 /**
  * Extended AppError utilities for CLI-specific features.
