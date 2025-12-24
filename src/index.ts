@@ -491,58 +491,6 @@ ${chalk.gray(`Last checked: ${new Date(health.timestamp).toLocaleString()}`)}
     // Parse command line arguments
     const { options, showHelp, showVersion, verbose } = parseCliArgs(args)
 
-    // Parse command line arguments for main command
-    const options: StartOptions = {}
-    let showHelp = false
-    let showVersion = false
-    const unknownArgs: string[] = [] // Collect unknown args to pass through to claude
-
-    for (let i = 0; i < args.length; i++) {
-      const arg = args[i]
-
-      if (arg === '-h' || arg === '--help') {
-        showHelp = true
-        // Also pass through to claude
-        unknownArgs.push(arg)
-      } else if (arg === '-v' || arg === '--version') {
-        showVersion = true
-        // Also pass through to claude (will show after our version)
-        unknownArgs.push(arg)
-      } else if (arg === '--happy-starting-mode') {
-        options.startingMode = z.enum(['local', 'remote']).parse(args[++i])
-      } else if (arg === '--yolo') {
-        // Shortcut for --dangerously-skip-permissions
-        unknownArgs.push('--dangerously-skip-permissions')
-      } else if (arg === '--started-by') {
-        options.startedBy = args[++i] as 'daemon' | 'terminal'
-      } else if (arg === '--claude-env') {
-        // Parse KEY=VALUE environment variable to pass to Claude
-        const envArg = args[++i]
-        if (envArg && envArg.includes('=')) {
-          const eqIndex = envArg.indexOf('=')
-          const key = envArg.substring(0, eqIndex)
-          const value = envArg.substring(eqIndex + 1)
-          options.claudeEnvVars = options.claudeEnvVars || {}
-          options.claudeEnvVars[key] = value
-        } else {
-          console.error(chalk.red(`Invalid --claude-env format: ${envArg}. Expected KEY=VALUE`))
-          process.exit(1)
-        }
-      } else {
-        // Pass unknown arguments through to claude
-        unknownArgs.push(arg)
-        // Check if this arg expects a value (simplified check for common patterns)
-        if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
-          unknownArgs.push(args[++i])
-        }
-      }
-    }
-
-    // Add unknown args to claudeArgs
-    if (unknownArgs.length > 0) {
-      options.claudeArgs = [...(options.claudeArgs || []), ...unknownArgs]
-    }
-
     // Show help
     if (showHelp) {
       // Use auto-generated help text from command registry

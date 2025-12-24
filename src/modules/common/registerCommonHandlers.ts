@@ -285,6 +285,7 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager, wor
         if (!validation.valid) {
             return { success: false, error: validation.error };
         }
+        const filePath = validation.resolvedPath;
 
         try {
             // If expectedHash is provided (not null), verify existing file
@@ -351,6 +352,7 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager, wor
         if (!validation.valid) {
             return { success: false, error: validation.error };
         }
+        const dirPath = validation.resolvedPath;
 
         try {
             const entries = await readdir(dirPath, { withFileTypes: true });
