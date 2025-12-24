@@ -22,13 +22,12 @@ jobs:
       uses: actions/setup-node@v6
       with:
         node-version: ${{ matrix.node-version }}
-        cache: 'yarn'
 
     - name: Enable Corepack
       run: corepack enable
 
     - name: Install dependencies
-      run: yarn install --immutable
+      run: yarn install
       
     - name: Build package
       run: yarn build
@@ -84,13 +83,12 @@ jobs:
       uses: actions/setup-node@v6
       with:
         node-version: ${{ matrix.node-version }}
-        cache: 'yarn'
 
     - name: Enable Corepack
       run: corepack enable
 
     - name: Install dependencies
-      run: yarn install --immutable
+      run: yarn install
       
     - name: Build package
       run: yarn build
