@@ -65,7 +65,7 @@ export class RpcHandlerManager {
         this.handlers.set(prefixedMethod, handler as RpcHandler<any, any>);
 
         if (this.socket) {
-            this.socket.emit('rpc-register', { method: prefixedMethod });
+            (this.socket as unknown as HappyWebSocket).emitClient('rpc-register', { method: prefixedMethod });
         }
     }
 
@@ -192,7 +192,7 @@ export class RpcHandlerManager {
         // Cast to RpcSocket interface - HappyWebSocket implements emit/on/off
         this.socket = socket as unknown as RpcSocket;
         for (const [prefixedMethod] of this.handlers) {
-            socket.emit('rpc-register', { method: prefixedMethod });
+            socket.emitClient('rpc-register', { method: prefixedMethod });
         }
 
         // Listen for cancellation events from the server

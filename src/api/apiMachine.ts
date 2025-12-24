@@ -42,7 +42,7 @@ export class ApiMachineClient {
     private onSocketUpdate!: (data: Update) => void;
     private onSocketEphemeral!: (data: EphemeralUpdate) => void;
     private onSocketConnectError!: (error: unknown) => void;
-    private onSocketError!: (error: Error) => void;
+    private onSocketError!: (error: { message: string }) => void;
 
     constructor(
         private token: string,
@@ -329,7 +329,7 @@ export class ApiMachineClient {
                 logger.debug(`[API MACHINE] Received unhandled update type: ${updateType}`);
             }
         };
-        this.socket.on<Update>('update', this.onSocketUpdate);
+        this.socket.onServer('update', this.onSocketUpdate);
 
         // Ephemeral events - real-time status updates from server (HAP-357)
         this.onSocketEphemeral = (data: EphemeralUpdate) => {
@@ -353,17 +353,17 @@ export class ApiMachineClient {
                     logger.debug(`[API MACHINE] [EPHEMERAL] Unknown type: ${(data as { type: string }).type}`);
             }
         };
-        this.socket.on<EphemeralUpdate>('ephemeral', this.onSocketEphemeral);
+        this.socket.onServer('ephemeral', this.onSocketEphemeral);
 
         this.onSocketConnectError = (error) => {
             logger.debug(`[API MACHINE] Connection error: ${(error as Error).message}`);
         };
         this.socket.on('connect_error', this.onSocketConnectError);
 
-        this.onSocketError = (error: Error) => {
+        this.onSocketError = (error: { message: string }) => {
             logger.debug('[API MACHINE] Socket error:', error);
         };
-        this.socket.on('error', this.onSocketError);
+        this.socket.onServer('error', this.onSocketError);
 
         // Connect to server
         this.socket.connect();
