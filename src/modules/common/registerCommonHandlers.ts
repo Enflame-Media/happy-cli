@@ -208,7 +208,7 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager, wor
                         error: validation.error || 'Invalid working directory path'
                     };
                 }
-                cwd = validation.resolvedPath!;
+                cwd = validation.resolvedPath;
             }
 
             // Build options with shell enabled by default
@@ -267,7 +267,7 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager, wor
         }
 
         try {
-            const buffer = await withRetry(() => readFile(validation.resolvedPath!));
+            const buffer = await withRetry(() => readFile(validation.resolvedPath));
             const content = buffer.toString('base64');
             return { success: true, content };
         } catch (error) {
@@ -477,7 +477,7 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager, wor
             if (!validation.valid) {
                 return { success: false, error: validation.error || 'Invalid directory path' };
             }
-            const treePath = validation.resolvedPath!;
+            const treePath = validation.resolvedPath;
 
             // Get the base name for the root node
             const baseName = treePath === '/' ? '/' : treePath.split('/').pop() || treePath;
