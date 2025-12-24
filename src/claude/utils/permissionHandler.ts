@@ -1,8 +1,72 @@
 /**
  * Permission Handler for canCallTool integration
- * 
- * Replaces the MCP permission server with direct SDK integration.
- * Handles tool permission requests, responses, and state management.
+ *
+ * This module implements a thread-safe permission request/response system for Claude tool calls.
+ * It replaces the MCP permission server with direct SDK integration, handling tool permission
+ * requests, responses, and state management.
+ *
+ * ## Permission Flow
+ *
+ * ```
+ * ┌──────────────┐    ┌─────────────────────┐    ┌───────────────┐
+ * │ Claude SDK   │───►│  PermissionHandler  │───►│  Mobile App   │
+ * │ (tool_use)   │    │                     │    │  (approval)   │
+ * └──────────────┘    └─────────────────────┘    └───────────────┘
+ *       │                      │                        │
+ *       │ 1. canCallTool()     │ 2. handleToolCall()    │
+ *       │    with toolName     │    resolves toolCallId │
+ *       │    and input         │                        │
+ *       │                      │ 3. Creates pending     │
+ *       │                      │    request with        │
+ *       │                      │    unique ID           │
+ *       │                      │                        │
+ *       │                      │ 4. Sends push          │
+ *       │                      │    notification ───────┼────►
+ *       │                      │                        │
+ *       │                      │                        │ 5. User approves/
+ *       │                      │ 6. RPC 'permission'    │    denies
+ *       │                      │    response with ID ◄──┤
+ *       │                      │                        │
+ *       │ 7. Promise resolves  │ handlePermissionResponse()
+ *       │    with result ◄─────┤                        │
+ *       │                      │                        │
+ * ```
+ *
+ * ## Concurrency Safety
+ *
+ * The handler uses several mechanisms to ensure thread-safe operation:
+ *
+ * 1. **Unique Request ID Correlation**: Each tool call from Claude has a unique `id` in the
+ *    `tool_use` content block. This ID is used as the key in `pendingRequests` Map, ensuring
+ *    atomic request-response matching even with multiple concurrent requests.
+ *
+ * 2. **Request Timeout with Cleanup**: Each pending request has an associated timeout. When
+ *    the timeout fires, the request is automatically cleaned up:
+ *    - Removed from `pendingRequests` Map
+ *    - Moved to `completedRequests` in agent state with 'timeout' status
+ *    - Promise resolved with deny behavior
+ *
+ * 3. **Abort Signal Handling**: Each request respects an AbortSignal for cancellation. When
+ *    aborted, cleanup is performed and the promise is rejected.
+ *
+ * 4. **LRU Eviction**: Both `responses` Map and `toolCalls` array have size limits with
+ *    automatic eviction of oldest entries to prevent memory leaks.
+ *
+ * 5. **Session Reset**: The `reset()` method cancels all pending requests and clears state
+ *    when switching sessions or modes.
+ *
+ * ## Race Condition Handling
+ *
+ * - **Timeout vs Response Race**: The `cleanup()` function clears the timeout handler and
+ *   removes event listeners. The first resolution (timeout or response) wins; subsequent
+ *   attempts to resolve find the request already removed from `pendingRequests`.
+ *
+ * - **Identical Tool Calls**: Tool calls with the same name and input are distinguished by
+ *   their unique `id` from Claude. The `resolveToolCallId` method marks matched tool calls
+ *   as `used` to prevent double-matching.
+ *
+ * @module permissionHandler
+ * @see HAP-467 - Concurrent permission responses may race in MCP server
  */
 
 import { logger } from "@/lib";
@@ -22,6 +86,16 @@ import { AppError, ErrorCodes } from "@/utils/errors";
  */
 const DEFAULT_PERMISSION_TIMEOUT = 30000;
 
+/**
+ * Response from the mobile app for a permission request.
+ *
+ * @property id - The unique tool call ID that correlates request to response
+ * @property approved - Whether the user approved the tool call
+ * @property reason - Optional reason for denial (shown to Claude)
+ * @property mode - Optional mode change (e.g., switch to acceptEdits)
+ * @property allowTools - Optional list of tools to auto-approve in future
+ * @property receivedAt - Timestamp when response was received (for LRU eviction)
+ */
 interface PermissionResponse {
     id: string;
     approved: boolean;
@@ -32,6 +106,18 @@ interface PermissionResponse {
 }
 
 
+/**
+ * Represents a pending permission request awaiting user response.
+ *
+ * Each pending request is stored in `pendingRequests` Map with the tool call ID as key.
+ * This enables atomic request-response correlation - when a response arrives, we look up
+ * the pending request by ID and resolve/reject its promise.
+ *
+ * @property resolve - Resolves the permission promise with allow/deny result
+ * @property reject - Rejects the permission promise (on abort/reset)
+ * @property toolName - The name of the tool being requested
+ * @property input - The input arguments for the tool call
+ */
 interface PendingRequest {
     resolve: (value: PermissionResult) => void;
     reject: (error: Error) => void;
@@ -39,9 +125,44 @@ interface PendingRequest {
     input: unknown;
 }
 
+/**
+ * Manages tool permission requests for Claude Code SDK integration.
+ *
+ * This class coordinates between Claude's tool calls and user approval via mobile app.
+ * It implements atomic request-response correlation using unique tool call IDs, with
+ * timeout handling and cleanup to prevent orphaned requests.
+ *
+ * ## Thread Safety
+ *
+ * While JavaScript is single-threaded, async operations can interleave. This class
+ * ensures correctness through:
+ * - Using Map with unique IDs for O(1) lookup and atomic key-based operations
+ * - First-resolution-wins pattern for timeout vs response races
+ * - Cleanup functions that remove listeners and clear timeouts
+ *
+ * ## Memory Management
+ *
+ * - `MAX_RESPONSES` (1000): Limits stored permission responses with LRU eviction
+ * - `MAX_TOOL_CALLS` (1000): Limits tracked tool calls with FIFO eviction
+ * - Pending requests are removed on resolution, timeout, or abort
+ *
+ * @example
+ * ```typescript
+ * const handler = new PermissionHandler(session);
+ *
+ * // Set callbacks
+ * handler.setOnPermissionRequest((id) => console.log('Awaiting:', id));
+ * handler.setOnPermissionTimeout((id, tool) => console.log('Timed out:', tool));
+ *
+ * // Used by SDK as canCallTool callback
+ * const result = await handler.handleToolCall('Edit', input, 'agent', { signal });
+ * ```
+ */
 export class PermissionHandler {
+    /** Maximum number of permission responses to cache (LRU eviction) */
     private static readonly MAX_RESPONSES = 1000;
 
+    /** Maximum number of tool calls to track (FIFO eviction) */
     private static readonly MAX_TOOL_CALLS = 1000;
 
     private toolCalls: { id: string, name: string, input: unknown, used: boolean }[] = [];
