@@ -547,7 +547,7 @@ ${chalk.gray(`Last checked: ${new Date(health.timestamp).toLocaleString()}`)}
     if (showHelp) {
       // Use auto-generated help text from command registry
       console.log(generateMainHelp())
-
+      console.log(`
 ${chalk.bold('Usage:')}
   happy [options]         Start Claude with mobile control
   happy auth              Manage authentication

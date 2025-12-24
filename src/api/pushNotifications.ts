@@ -152,10 +152,10 @@ export class PushNotificationClient {
                     logger.debug(`[PUSH] Using token ${index + 1}: id=${token.id}`)
                 })
 
-        // Fetch all push tokens
-        logger.debug('[PUSH] Fetching push tokens...')
-        const tokens = await this.fetchPushTokens()
-        logger.debug(`[PUSH] Fetched ${tokens.length} push tokens`)
+                if (tokens.length === 0) {
+                    logger.debug('No push tokens found for user')
+                    return
+                }
 
                 // Create messages for all tokens
                 const messages: ExpoPushMessage[] = tokens.map((token, index) => {
@@ -170,26 +170,13 @@ export class PushNotificationClient {
                     }
                 })
 
-        if (tokens.length === 0) {
-            logger.debug('No push tokens found for user')
-            return
-        }
-
-        // Create messages for all tokens
-        const messages: ExpoPushMessage[] = tokens.map((token, index) => {
-            logger.debug(`[PUSH] Creating message ${index + 1} for token`)
-            return {
-                to: token.token,
-                title,
-                body,
-                data,
-                sound: 'default',
-                priority: 'high'
+                // Send notifications (sendPushNotifications handles its own success/failure logging)
+                logger.debug(`[PUSH] Sending ${messages.length} push notifications...`)
+                await this.sendPushNotifications(messages)
+                logger.debug('[PUSH] Push notifications sent successfully')
+            } catch (error) {
+                logger.debug('[PUSH] Error sending to all devices:', error)
             }
-        })
-
-        // Send notifications (sendPushNotifications handles its own success/failure logging)
-        logger.debug(`[PUSH] Sending ${messages.length} push notifications...`)
-        await this.sendPushNotifications(messages)
+        })()
     }
 }
