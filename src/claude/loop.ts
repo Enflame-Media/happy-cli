@@ -40,23 +40,9 @@ export async function loop(opts: LoopOptions) {
 
     // Get log path for debug display
     const logPath = logger.logFilePath;
-    let session = new Session({
-        api: opts.api,
-        client: opts.session,
-        path: opts.path,
-        sessionId: null,
-        claudeEnvVars: opts.claudeEnvVars,
-        claudeArgs: opts.claudeArgs,
-        mcpServers: opts.mcpServers,
-        logPath: logPath,
-        messageQueue: opts.messageQueue,
-        allowedTools: opts.allowedTools,
-        onModeChange: opts.onModeChange,
-        hookSettingsPath: opts.hookSettingsPath
-    });
 
     try {
-        session = new Session({
+        let session = new Session({
             api: opts.api,
             client: opts.session,
             path: opts.path,
