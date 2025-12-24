@@ -18,6 +18,7 @@
 import { logger } from '@/ui/logger';
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
+import type { ServerToClientEvents, ClientToServerEvents } from './types';
 
 /**
  * Configuration for WebSocket connection behavior
@@ -52,6 +53,14 @@ export interface HappyWebSocketAuth {
  */
 type EventCallback<T = unknown> = (data: T) => void | Promise<void>;
 type RpcCallback = (data: { method: string; params: string }, callback: (response: string) => void) => void | Promise<void>;
+
+/**
+ * Type aliases for typed event handling (HAP-520)
+ * @see ServerToClientEvents - Events received from server
+ * @see ClientToServerEvents - Events sent to server
+ */
+type ServerEventName = keyof ServerToClientEvents;
+type ClientEventName = keyof ClientToServerEvents;
 
 /**
  * Pending acknowledgement tracking
@@ -114,7 +123,7 @@ export interface WebSocketMetrics {
 /**
  * Error thrown when a WebSocket acknowledgment times out
  */
-export class WebSocketAckTimeoutError extends Error {
+class WebSocketAckTimeoutError extends Error {
     constructor(event: string, timeoutMs: number) {
         super(`WebSocket ack timeout for event '${event}' after ${timeoutMs}ms`);
         this.name = 'WebSocketAckTimeoutError';
@@ -124,7 +133,7 @@ export class WebSocketAckTimeoutError extends Error {
 /**
  * Error thrown when attempting to send on a disconnected WebSocket
  */
-export class WebSocketDisconnectedError extends Error {
+class WebSocketDisconnectedError extends Error {
     constructor(operation: string = 'send message') {
         super(`WebSocket not connected: cannot ${operation}`);
         this.name = 'WebSocketDisconnectedError';
@@ -514,6 +523,131 @@ export class HappyWebSocket {
     onRpcRequest(handler: RpcCallback): this {
         this.rpcHandler = handler;
         return this;
+    }
+
+    // =========================================================================
+    // TYPE-SAFE EVENT METHODS (HAP-520)
+    // =========================================================================
+    // These methods provide compile-time type safety for WebSocket events.
+    // Use these instead of the generic on()/emit() for better IDE support
+    // and protection against event name typos.
+    //
+    // @see ServerToClientEvents - For available server event names
+    // @see ClientToServerEvents - For available client event names
+    // =========================================================================
+
+    /**
+     * Register a type-safe handler for server-to-client events.
+     *
+     * Provides compile-time validation of:
+     * - Event names (autocomplete + error on typos)
+     * - Callback parameter types (inferred from interface)
+     *
+     * IMPORTANT (HAP-361): Handlers are stored as WeakRefs. The handler will be
+     * garbage collected if the caller doesn't retain a reference to the callback.
+     * Store the callback in a variable to ensure it persists.
+     *
+     * @example
+     * // ✅ Type-safe - callback receives typed Update
+     * const updateHandler = (data) => console.log(data.body);
+     * socket.onServer('update', updateHandler);
+     *
+     * // ❌ Compile error - 'invalid-event' is not a valid event name
+     * socket.onServer('invalid-event', handler);
+     *
+     * @param event - Server event name (autocomplete available)
+     * @param callback - Type-safe callback matching the event's signature
+     * @returns this for chaining
+     * @see HAP-520 - Type-safe event handling implementation
+     */
+    onServer<K extends ServerEventName>(
+        event: K,
+        callback: ServerToClientEvents[K]
+    ): this {
+        // Cast to EventCallback for internal storage while preserving external type safety
+        return this.on(event, callback as EventCallback);
+    }
+
+    /**
+     * Remove a type-safe handler for server-to-client events.
+     *
+     * @param event - Server event name
+     * @param callback - The same callback reference passed to onServer()
+     * @returns this for chaining
+     */
+    offServer<K extends ServerEventName>(
+        event: K,
+        callback: ServerToClientEvents[K]
+    ): this {
+        return this.off(event, callback as EventCallback);
+    }
+
+    /**
+     * Emit a type-safe event to the server.
+     *
+     * Provides compile-time validation of:
+     * - Event names (autocomplete + error on typos)
+     * - Event payload types (inferred from interface)
+     *
+     * @example
+     * // ✅ Type-safe - payload shape is validated
+     * socket.emitClient('message', { sid: 'abc', message: 'encrypted...' });
+     *
+     * // ❌ Compile error - missing required 'message' property
+     * socket.emitClient('message', { sid: 'abc' });
+     *
+     * // ❌ Compile error - 'invalid-event' is not a valid event name
+     * socket.emitClient('invalid-event', data);
+     *
+     * @param event - Client event name (autocomplete available)
+     * @param data - Type-safe payload matching the event's expected data type
+     * @throws WebSocketDisconnectedError if not connected
+     * @see HAP-520 - Type-safe event handling implementation
+     */
+    emitClient<K extends ClientEventName>(
+        event: K,
+        data: Parameters<ClientToServerEvents[K]>[0]
+    ): void {
+        this.emit(event, data);
+    }
+
+    /**
+     * Emit a volatile (fire-and-forget) type-safe event to the server.
+     * Does not throw if disconnected - the message is silently dropped.
+     *
+     * Useful for non-critical events like heartbeats where missing a few
+     * messages is acceptable.
+     *
+     * @param event - Client event name (autocomplete available)
+     * @param data - Type-safe payload matching the event's expected data type
+     * @see HAP-520 - Type-safe event handling implementation
+     */
+    emitClientVolatile<K extends ClientEventName>(
+        event: K,
+        data: Parameters<ClientToServerEvents[K]>[0]
+    ): void {
+        this.volatile.emit(event, data);
+    }
+
+    /**
+     * Emit a type-safe event to the server and wait for acknowledgement.
+     *
+     * Use this for events that require a response, like state updates.
+     *
+     * @param event - Client event name
+     * @param data - Type-safe payload
+     * @param timeout - Optional timeout in milliseconds (defaults to config.ackTimeout)
+     * @returns Promise resolving to the acknowledgement response
+     * @throws WebSocketAckTimeoutError if acknowledgement times out
+     * @throws WebSocketDisconnectedError if not connected
+     * @see HAP-520 - Type-safe event handling implementation
+     */
+    emitClientWithAck<K extends ClientEventName, R = unknown>(
+        event: K,
+        data: Parameters<ClientToServerEvents[K]>[0],
+        timeout?: number
+    ): Promise<R> {
+        return this.emitWithAck<R>(event, data, timeout);
     }
 
     /**

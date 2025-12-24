@@ -81,7 +81,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
     private readonly onSocketConnectError: (error: unknown) => void;
     private readonly onSocketUpdate: (data: Update) => Promise<void>;
     private readonly onSocketEphemeral: (data: EphemeralUpdate) => void;
-    private readonly onSocketError: (error: unknown) => void;
+    private readonly onSocketError: (error: { message: string }) => void;
 
     constructor(token: string, session: Session) {
         super()
@@ -286,7 +286,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                 logger.debug('[SOCKET] [UPDATE] [ERROR] Error handling update', { error });
             }
         };
-        this.socket.on<Update>('update', this.onSocketUpdate);
+        this.socket.onServer('update', this.onSocketUpdate);
 
         // Ephemeral events - real-time status updates from server (HAP-357)
         this.onSocketEphemeral = (data: EphemeralUpdate) => {
@@ -308,13 +308,13 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                     logger.debug(`[EPHEMERAL] Unknown type: ${(data as { type: string }).type}`);
             }
         };
-        this.socket.on<EphemeralUpdate>('ephemeral', this.onSocketEphemeral);
+        this.socket.onServer('ephemeral', this.onSocketEphemeral);
 
         // DEATH
-        this.onSocketError = (error) => {
+        this.onSocketError = (error: { message: string }) => {
             logger.debug('[API] Socket error:', error);
         };
-        this.socket.on('error', this.onSocketError);
+        this.socket.onServer('error', this.onSocketError);
 
         //
         // Connect (after short delay to give a time to add handlers)
@@ -371,7 +371,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
         logger.debugLargeJson('[SOCKET] Sending message through socket:', content)
 
         const encrypted = encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, content));
-        this.socket.emit('message', {
+        this.socket.emitClient('message', {
             sid: this.sessionId,
             message: encrypted
         });
@@ -421,7 +421,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
             }
         };
         const encrypted = encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, content));
-        this.socket.emit('message', {
+        this.socket.emitClient('message', {
             sid: this.sessionId,
             message: encrypted
         });
@@ -441,7 +441,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
             throw new SocketDisconnectedError('send session event');
         }
 
-        let content = {
+        const content = {
             role: 'agent',
             content: {
                 id: id ?? randomUUID(),
@@ -450,7 +450,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
             }
         };
         const encrypted = encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, content));
-        this.socket.emit('message', {
+        this.socket.emitClient('message', {
             sid: this.sessionId,
             message: encrypted
         });
@@ -468,7 +468,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
         if (process.env.DEBUG) { // too verbose for production
             logger.debug(`[API] Sending keep alive message: ${thinking}`);
         }
-        this.socket.volatile.emit('session-alive', {
+        this.socket.emitClientVolatile('session-alive', {
             sid: this.sessionId,
             time: Date.now(),
             thinking,
@@ -485,7 +485,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
             return;
         }
 
-        this.socket.emit('session-end', { sid: this.sessionId, time: Date.now() });
+        this.socket.emitClient('session-end', { sid: this.sessionId, time: Date.now() });
     }
 
     /**
@@ -524,7 +524,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
             }
         }
         logger.debugLargeJson('[SOCKET] Sending usage data:', usageReport)
-        this.socket.emit('usage-report', usageReport);
+        this.socket.emitClient('usage-report', usageReport);
 
         // Check for context threshold crossing and send push notification if needed
         if (this.contextNotificationService) {
@@ -543,7 +543,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
         return this.metadataLock.inLock(async () => {
             await backoff(async () => {
                 let updated = handler(this.metadata!); // Weird state if metadata is null - should never happen but here we are
-                const answer = await this.socket.emitWithAck<MetadataUpdateResponse>('update-metadata', { sid: this.sessionId, expectedVersion: this.metadataVersion, metadata: encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, updated)) });
+                const answer = await this.socket.emitClientWithAck<'update-metadata', MetadataUpdateResponse>('update-metadata', { sid: this.sessionId, expectedVersion: this.metadataVersion, metadata: encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, updated)) });
                 if (answer.result === 'success') {
                     const decryptedMetadata = decrypt<Metadata>(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.metadata));
                     if (decryptedMetadata === null) {
@@ -579,7 +579,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
         return this.agentStateLock.inLock(async () => {
             await backoff(async () => {
                 let updated = handler(this.agentState || {});
-                const answer = await this.socket.emitWithAck<StateUpdateResponse>('update-state', { sid: this.sessionId, expectedVersion: this.agentStateVersion, agentState: updated ? encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, updated)) : null });
+                const answer = await this.socket.emitClientWithAck<'update-state', StateUpdateResponse>('update-state', { sid: this.sessionId, expectedVersion: this.agentStateVersion, agentState: updated ? encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, updated)) : null });
                 if (answer.result === 'success') {
                     if (answer.agentState) {
                         const decryptedState = decrypt<AgentState>(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.agentState));
@@ -698,7 +698,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                     ? encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, currentState))
                     : null;
 
-                const answer = await this.socket.emitWithAck<StateUpdateResponse>('update-state', {
+                const answer = await this.socket.emitClientWithAck<'update-state', StateUpdateResponse>('update-state', {
                     sid: this.sessionId,
                     expectedVersion: this.agentStateVersion,
                     agentState: encryptedState
@@ -770,7 +770,7 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                     return;
                 }
 
-                const answer = await this.socket.emitWithAck<MetadataUpdateResponse>('update-metadata', {
+                const answer = await this.socket.emitClientWithAck<'update-metadata', MetadataUpdateResponse>('update-metadata', {
                     sid: this.sessionId,
                     expectedVersion: this.metadataVersion,
                     metadata: encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, currentMetadata))

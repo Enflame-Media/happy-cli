@@ -3,48 +3,13 @@ import { UsageSchema } from '@/claude/types'
 import { PermissionMode } from '@/claude/loop'
 
 // =============================================================================
-// RE-EXPORTS FROM @happy/protocol (shared package)
+// TYPE IMPORTS FROM @happy/protocol (shared package)
 // =============================================================================
-// These re-exports maintain backward compatibility for existing code that
-// imports from @/api/types instead of directly from @happy/protocol.
-//
-// Using direct re-export syntax to avoid "imported but never used" bundler warnings.
+// Import only what's actually used locally for type aliases and internal use.
 
-// Update schemas
-export {
-  ApiUpdateSchema,
-  ApiUpdateContainerSchema,
-  ApiUpdateNewMessageSchema,
-  ApiDeleteSessionSchema,
-  ApiUpdateNewSessionSchema,
-  ApiNewMachineSchema,
-  ApiNewArtifactSchema,
-  ApiUpdateArtifactSchema,
-  ApiDeleteArtifactSchema,
-  ApiRelationshipUpdatedSchema,
-  ApiNewFeedPostSchema,
-  ApiKvBatchUpdateSchema,
-  ApiUpdateMachineStateSchema,
-  ApiUpdateSessionStateSchema,
-  // Common schemas
-  EncryptedContentSchema,
-  VersionedValueSchema,
-  NullableVersionedValueSchema,
-  // Ephemeral schemas
-  ApiEphemeralUpdateSchema,
-  ApiEphemeralActivityUpdateSchema,
-  ApiEphemeralUsageUpdateSchema,
-  ApiEphemeralMachineActivityUpdateSchema,
-} from '@happy/protocol'
-
-// Type re-exports
-export type {
-  ApiUpdate,
+import type {
   ApiUpdateContainer,
-  ApiUpdateNewMessage,
   ApiDeleteSession,
-  ApiUpdateNewSession,
-  ApiNewMachine,
   ApiNewArtifact,
   ApiUpdateArtifact,
   ApiDeleteArtifact,
@@ -52,112 +17,65 @@ export type {
   ApiNewFeedPost,
   ApiKvBatchUpdate,
   ApiUpdateMachineState,
-  ApiUpdateSessionState,
-  ApiEphemeralUpdate,
   ApiEphemeralActivityUpdate,
   ApiEphemeralUsageUpdate,
   ApiEphemeralMachineActivityUpdate,
-  GitHubProfile,
-  EncryptedContent,
-  VersionedValue,
-  NullableVersionedValue,
-} from '@happy/protocol'
-
-// Import only what's used locally for aliases
-import {
-  ApiUpdateContainerSchema,
-  type ApiUpdateContainer,
-  type ApiDeleteSession,
-  type ApiNewArtifact,
-  type ApiUpdateArtifact,
-  type ApiDeleteArtifact,
-  type ApiRelationshipUpdated,
-  type ApiNewFeedPost,
-  type ApiKvBatchUpdate,
-  type ApiUpdateMachineState,
-  type ApiEphemeralActivityUpdate,
-  type ApiEphemeralUsageUpdate,
-  type ApiEphemeralMachineActivityUpdate,
-  type ApiEphemeralUpdate,
+  ApiEphemeralUpdate,
 } from '@happy/protocol'
 
 // =============================================================================
-// LEGACY TYPE ALIASES (Deprecated - use Api* versions)
+// TYPE ALIASES (For internal use)
 // =============================================================================
-// These aliases maintain backward compatibility with code using the old naming.
-// New code should use the Api* prefixed versions from @happy/protocol.
 
-/** @deprecated Use ApiUpdateContainer from @happy/protocol */
-export const UpdateSchema: typeof ApiUpdateContainerSchema = ApiUpdateContainerSchema
-
-/** @deprecated Use ApiUpdateContainer from @happy/protocol */
+/** Alias for ApiUpdateContainer */
 export type Update = ApiUpdateContainer
 
-/** @deprecated Use ApiDeleteSession from @happy/protocol */
+/** Alias for ApiDeleteSession */
 export type DeleteSessionBody = ApiDeleteSession
 
-/** @deprecated Use ApiNewArtifact from @happy/protocol */
+/** Alias for ApiNewArtifact */
 export type NewArtifactBody = ApiNewArtifact
 
-/** @deprecated Use ApiUpdateArtifact from @happy/protocol */
+/** Alias for ApiUpdateArtifact */
 export type UpdateArtifactBody = ApiUpdateArtifact
 
-/** @deprecated Use ApiDeleteArtifact from @happy/protocol */
+/** Alias for ApiDeleteArtifact */
 export type DeleteArtifactBody = ApiDeleteArtifact
 
-/** @deprecated Use ApiRelationshipUpdated from @happy/protocol */
+/** Alias for ApiRelationshipUpdated */
 export type RelationshipUpdatedBody = ApiRelationshipUpdated
 
-/** @deprecated Use ApiNewFeedPost from @happy/protocol */
+/** Alias for ApiNewFeedPost */
 export type NewFeedPostBody = ApiNewFeedPost
 
-/** @deprecated Use ApiKvBatchUpdate from @happy/protocol */
+/** Alias for ApiKvBatchUpdate */
 export type KvBatchUpdateBody = ApiKvBatchUpdate
 
-/** @deprecated Use ApiUpdateMachineState from @happy/protocol */
+/** Alias for ApiUpdateMachineState */
 export type UpdateMachineBody = ApiUpdateMachineState
 
-// =============================================================================
-// EPHEMERAL TYPE ALIASES (Deprecated - use Api* versions)
-// =============================================================================
-
-/** @deprecated Use ApiEphemeralActivityUpdate from @happy/protocol */
+/** Alias for ApiEphemeralActivityUpdate */
 export type EphemeralActivityUpdate = ApiEphemeralActivityUpdate
 
-/** @deprecated Use ApiEphemeralUsageUpdate from @happy/protocol */
+/** Alias for ApiEphemeralUsageUpdate */
 export type EphemeralUsageUpdate = ApiEphemeralUsageUpdate
 
-/** @deprecated Use ApiEphemeralMachineActivityUpdate from @happy/protocol */
+/** Alias for ApiEphemeralMachineActivityUpdate */
 export type EphemeralMachineActivityUpdate = ApiEphemeralMachineActivityUpdate
 
-/** @deprecated Use ApiEphemeralUpdate from @happy/protocol */
+/** Alias for ApiEphemeralUpdate */
 export type EphemeralUpdate = ApiEphemeralUpdate
-
-// =============================================================================
-// GITHUB PROFILE (Re-exported from @happy/protocol)
-// =============================================================================
-// The canonical GitHubProfileSchema is now in @happy/protocol with proper
-// nullable/optional fields and passthrough. Re-export here for backward
-// compatibility with code that imports from @/api/types.
-
-export { GitHubProfileSchema } from '@happy/protocol'
-
-// Note: GitHubProfile type is re-exported from @happy/protocol at the top of this file
-
-// =============================================================================
-// USAGE DATA TYPE FROM CLAUDE
-// =============================================================================
-
-/**
- * Usage data type from Claude
- */
-export type Usage = z.infer<typeof UsageSchema>
 
 // =============================================================================
 // SOCKET EVENT INTERFACES (CLI-SPECIFIC)
 // =============================================================================
 // These interfaces define the WebSocket events for CLI-server communication.
 // They include CLI-specific callback signatures and must remain local.
+//
+// Type-safe event handling is available via HappyWebSocket methods:
+// - socket.onServer('event', handler)  - Register typed server event handlers
+// - socket.emitClient('event', data)   - Emit typed client events
+// @see HAP-520 - Type-safe event handling implementation
 
 /**
  * Socket events from server to client
@@ -230,6 +148,16 @@ export interface ClientToServerEvents {
 }
 
 // =============================================================================
+// USAGE DATA TYPE FROM CLAUDE
+// =============================================================================
+
+/**
+ * Usage data type from Claude
+ */
+export type Usage = z.infer<typeof UsageSchema>
+
+
+// =============================================================================
 // CLI-SPECIFIC DOMAIN TYPES
 // =============================================================================
 // These types are specific to the CLI and include encryption-related fields
@@ -252,7 +180,7 @@ export type Session = {
 /**
  * Machine metadata - static information (rarely changes)
  */
-export const MachineMetadataSchema = z.object({
+const MachineMetadataSchema = z.object({
   host: z.string(),
   platform: z.string(),
   happyCliVersion: z.string(),
@@ -266,7 +194,7 @@ export type MachineMetadata = z.infer<typeof MachineMetadataSchema>
 /**
  * Daemon state - dynamic runtime information (frequently updated)
  */
-export const DaemonStateSchema = z.object({
+const DaemonStateSchema = z.object({
   status: z.union([
     z.enum(['running', 'shutting-down']),
     z.string() // Forward compatibility
