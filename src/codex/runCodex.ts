@@ -29,6 +29,7 @@ import { stopCaffeinate } from "@/utils/caffeinate";
 import { isValidSessionId } from "@/claude/utils/sessionValidation";
 import { SocketDisconnectedError } from "@/api/socketUtils";
 import { AppError, ErrorCodes } from "@/utils/errors";
+import { addBreadcrumb, trackMetric } from "@/telemetry";
 
 // Keep-alive timing configuration (prevents thundering herd on reconnection)
 const CODEX_KEEP_ALIVE_BASE_MS = 2000; // 2 seconds base interval
@@ -69,11 +70,18 @@ export async function runCodex(opts: {
     credentials: Credentials;
     startedBy?: 'daemon' | 'terminal';
 }): Promise<void> {
+    // Track session duration for performance monitoring (HAP-534)
+    const sessionStart = Date.now()
+    let modeChanges = 0
+
     type PermissionMode = 'default' | 'read-only' | 'safe-yolo' | 'yolo';
     interface EnhancedMode {
         permissionMode: PermissionMode;
         model?: string;
     }
+
+    // Track session creation for debugging context (HAP-534)
+    addBreadcrumb({ category: 'session', message: 'Codex session created', level: 'info' })
 
     //
     // Define session
@@ -689,6 +697,7 @@ export async function runCodex(opts: {
 
             // If a session exists and mode changed, restart on next iteration
             if (wasCreated && currentModeHash && message.hash !== currentModeHash) {
+                modeChanges++
                 logger.debug('[Codex] Mode changed – restarting Codex session');
                 messageBuffer.addMessage('═'.repeat(40), 'status');
                 messageBuffer.addMessage('Starting new Codex session (mode changed)...', 'status');
@@ -838,6 +847,14 @@ export async function runCodex(opts: {
         }
 
     } finally {
+        // Track session duration before cleanup (HAP-534)
+        trackMetric('session_duration', Date.now() - sessionStart, {
+            startingMode: 'remote',  // Codex always starts in remote mode
+            modeChanges,
+            agent: 'codex'
+        })
+        addBreadcrumb({ category: 'session', message: 'Codex session ended', level: 'info' })
+
         // Clean up resources when main loop exits
         logger.debug('[codex]: Final cleanup start');
         logActiveHandles('cleanup-start');

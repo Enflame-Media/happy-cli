@@ -120,10 +120,12 @@ import { initializeTelemetry, showTelemetryNoticeIfNeeded, trackMetric, setTag, 
     }
     return;
   } else if (subcommand === 'codex') {
-    // Handle codex command
+    // Handle codex command with timing (HAP-534)
+    const commandStart = Date.now()
+    addBreadcrumb({ category: 'command', message: 'Starting codex command', level: 'info' })
     try {
       const { runCodex } = await import('@/codex/runCodex');
-      
+
       // Parse startedBy argument
       let startedBy: 'daemon' | 'terminal' | undefined = undefined;
       for (let i = 1; i < args.length; i++) {
@@ -131,13 +133,15 @@ import { initializeTelemetry, showTelemetryNoticeIfNeeded, trackMetric, setTag, 
           startedBy = validateStartedBy(args[++i]);
         }
       }
-      
+
       const {
         credentials
       } = await authAndSetupMachineIfNeeded();
       await runCodex({credentials, startedBy});
+      trackMetric('command_duration', Date.now() - commandStart, { command: 'codex', success: true })
       // Do not force exit here; allow instrumentation to show lingering handles
     } catch (error) {
+      trackMetric('command_duration', Date.now() - commandStart, { command: 'codex', success: false })
       logger.errorAndExit('Codex command failed', error)
     }
     return;

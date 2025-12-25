@@ -50,6 +50,7 @@ export interface TelemetryEvent {
 export type MetricType =
   | 'startup_time'
   | 'command_duration'
+  | 'session_duration'
   | 'api_latency'
   | 'memory_usage'
 

@@ -5,7 +5,7 @@ import { Session } from "./session"
 import { claudeLocalLauncher } from "./claudeLocalLauncher"
 import { claudeRemoteLauncher } from "./claudeRemoteLauncher"
 import { ApiClient } from "@/lib"
-import { addBreadcrumb, setTag } from "@/telemetry"
+import { addBreadcrumb, setTag, trackMetric } from "@/telemetry"
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
 
@@ -36,6 +36,9 @@ interface LoopOptions {
 }
 
 export async function loop(opts: LoopOptions) {
+    // Track session duration for performance monitoring (HAP-534)
+    const sessionStart = Date.now()
+    let modeChanges = 0
 
     // Get log path for debug display
     const logPath = logger.logFilePath;
@@ -78,6 +81,7 @@ export async function loop(opts: LoopOptions) {
 
                 // Non "exit" reason means we need to switch to remote mode
                 mode = 'remote';
+                modeChanges++
 
                 // Track mode switch for debugging context (HAP-522)
                 addBreadcrumb({ category: 'session', message: 'Mode switch: local → remote', level: 'info' })
@@ -101,6 +105,7 @@ export async function loop(opts: LoopOptions) {
 
                 // Non "exit" reason means we need to switch to local mode
                 mode = 'local';
+                modeChanges++
 
                 // Track mode switch for debugging context (HAP-522)
                 addBreadcrumb({ category: 'session', message: 'Mode switch: remote → local', level: 'info' })
@@ -116,6 +121,14 @@ export async function loop(opts: LoopOptions) {
             }
         }
     } finally {
+        // Track session duration before cleanup (HAP-534)
+        trackMetric('session_duration', Date.now() - sessionStart, {
+            startingMode: opts.startingMode ?? 'local',
+            modeChanges,
+            agent: 'claude'
+        })
+        addBreadcrumb({ category: 'session', message: 'Session ended', level: 'info' })
+
         session?.destroy();
     }
 }
