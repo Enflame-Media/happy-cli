@@ -10,6 +10,7 @@ import { appendFileSync, renameSync } from 'fs'
 import { configuration } from '@/configuration'
 import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs'
 import { join, basename, dirname } from 'node:path'
+import { AppError, getHelpfulMessage, getAppErrorDocUrl } from '@/utils/errors'
 // Note: readDaemonState is imported dynamically in listDaemonLogFiles() to avoid
 // circular dependency: logger.ts -> persistence.ts -> logger.ts
 
@@ -600,17 +601,28 @@ class Logger {
 
   /**
    * Reports an error and exits the process.
-   * 
+   *
    * This is a convenience method for the common pattern of:
    * - Log error to user
    * - Exit with error code
-   * 
+   *
+   * For AppError instances, displays documentation URL for self-service debugging.
+   *
    * @param message - User-friendly error message
    * @param error - The error object (optional)
    * @param exitCode - Exit code (default: 1)
    */
   errorAndExit(message: string, error?: Error | unknown, exitCode: number = 1): never {
-    this.error(message, error, { suggestDebug: true })
+    // For AppError, use helpful message with documentation link
+    if (AppError.isAppError(error)) {
+      const docUrl = getAppErrorDocUrl(error)
+      this.error(message, error, {
+        suggestDebug: true,
+        actionHint: docUrl ? `For more information, see: ${docUrl}` : undefined
+      })
+    } else {
+      this.error(message, error, { suggestDebug: true })
+    }
 
     // Capture fatal errors with Sentry before exiting
     // Dynamic import to avoid circular dependency issues
@@ -634,17 +646,46 @@ class Logger {
 
   /**
    * Logs a technical/internal error that users typically don't need to see.
-   * 
+   *
    * These are logged to file always, but only shown in console when DEBUG=1.
    * Use for internal implementation details, verbose debugging info, etc.
-   * 
+   *
    * @param message - Technical error description
    * @param error - The error object (optional)
    */
   errorTechnical(message: string, error?: Error | unknown): void {
     this.error(message, error, { technical: true, suggestDebug: false })
   }
-  
+
+  /**
+   * Logs an AppError with helpful message including documentation URL.
+   *
+   * This formats the error with correlation ID and, if available, a link to
+   * troubleshooting documentation for self-service debugging.
+   *
+   * @param appError - The AppError instance
+   *
+   * @example
+   * ```typescript
+   * const error = new AppError(ErrorCodes.AUTH_FAILED, 'Token expired');
+   * logger.errorApp(error);
+   * // Output:
+   * // Error: Token expired (ref: abc12345)
+   * //   For more information, see: https://...
+   * ```
+   */
+  errorApp(appError: AppError): void {
+    const helpfulMessage = getHelpfulMessage(appError)
+    console.error(chalk.red('Error:'), helpfulMessage)
+
+    // Also log to file with full details
+    this.logToFile(
+      `[${this.localTimezoneTimestamp()}] [ERROR]`,
+      `[${appError.code}] ${appError.message}`,
+      appError.stack ? `\nStack: ${appError.stack}` : ''
+    )
+  }
+
   private logToConsole(level: 'debug' | 'error' | 'info' | 'warn', prefix: string, message: string, ...args: unknown[]): void {
     switch (level) {
       case 'debug': {

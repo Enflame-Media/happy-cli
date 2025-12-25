@@ -37,7 +37,7 @@ export type { AppErrorOptions, AppErrorJSON, ErrorCode } from '@happy/errors'
 // ERROR DOCUMENTATION UTILITIES
 // =============================================================================
 // These utilities provide helpful error messages with documentation links
-// for self-service debugging. TODO: Create error documentation files (HAP-TBD)
+// for self-service debugging. See docs/errors/ for the documentation files.
 
 /**
  * Base URL for error documentation.
