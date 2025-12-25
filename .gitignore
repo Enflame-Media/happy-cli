@@ -39,3 +39,6 @@ pnpm-lock.yaml
 
 # test coverage
 coverage/
+
+# npm auth token (never commit)
+.npmrc

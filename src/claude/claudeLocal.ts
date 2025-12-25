@@ -22,8 +22,10 @@ export async function claudeLocal(opts: {
     onSessionFound: (id: string) => void,
     onThinkingChange?: (thinking: boolean) => void,
     claudeEnvVars?: Record<string, string>,
-    claudeArgs?: string[]
-    allowedTools?: string[]
+    claudeArgs?: string[],
+    allowedTools?: string[],
+    /** Path to temporary settings file with SessionStart hook (required for session tracking) */
+    hookSettingsPath?: string
 }) {
 
     // Ensure project directory exists

@@ -5,6 +5,7 @@ import { authenticateCodex } from './connect/authenticateCodex';
 import { authenticateClaude } from './connect/authenticateClaude';
 import { authenticateGemini } from './connect/authenticateGemini';
 import { AppError, ErrorCodes } from '@/utils/errors';
+import { EXIT_CODES } from '@/commands/registry';
 
 /**
  * Handle connect subcommand

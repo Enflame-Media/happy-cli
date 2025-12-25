@@ -18,8 +18,12 @@ export class Session {
     readonly mcpServers: Record<string, any>;
     readonly allowedTools?: string[];
     readonly _onModeChange: (mode: 'local' | 'remote') => void;
+    /** Path to temporary settings file with SessionStart hook (required for session tracking) */
+    readonly hookSettingsPath?: string;
 
     private keepAliveInterval?: ReturnType<typeof setInterval>;
+    /** Callbacks to be notified when session ID is found/changed */
+    private sessionFoundCallbacks: ((sessionId: string) => void)[] = [];
 
     sessionId: string | null;
     mode: 'local' | 'remote' = 'local';
@@ -37,6 +41,8 @@ export class Session {
         messageQueue: MessageQueue2<EnhancedMode>,
         onModeChange: (mode: 'local' | 'remote') => void,
         allowedTools?: string[],
+        /** Path to temporary settings file with SessionStart hook (required for session tracking) */
+        hookSettingsPath?: string,
     }) {
         this.path = opts.path;
         this.api = opts.api;
@@ -49,6 +55,7 @@ export class Session {
         this.mcpServers = opts.mcpServers;
         this.allowedTools = opts.allowedTools;
         this._onModeChange = opts.onModeChange;
+        this.hookSettingsPath = opts.hookSettingsPath;
 
         // Start keep alive with jitter to prevent thundering herd
         this.client.keepAlive(this.thinking, this.mode);
@@ -61,14 +68,15 @@ export class Session {
 
     /**
      * Cleanup resources - MUST be called when session ends
-     * Clears the keep-alive interval to prevent memory leaks
+     * Clears the keep-alive interval and callbacks to prevent memory leaks
      */
     destroy(): void {
         if (this.keepAliveInterval) {
             clearInterval(this.keepAliveInterval);
             this.keepAliveInterval = undefined;
-            logger.debug('[Session] Keep-alive interval cleared');
         }
+        this.sessionFoundCallbacks = [];
+        logger.debug('[Session] Resources cleaned up');
     }
 
     onThinkingChange = (thinking: boolean) => {
@@ -84,13 +92,39 @@ export class Session {
 
     onSessionFound = (sessionId: string) => {
         this.sessionId = sessionId;
-        
+
         // Update metadata with Claude Code session ID
         this.client.updateMetadata((metadata) => ({
             ...metadata,
             claudeSessionId: sessionId
         }));
         logger.debug(`[Session] Claude Code session ID ${sessionId} added to metadata`);
+
+        // Notify all registered callbacks
+        for (const callback of this.sessionFoundCallbacks) {
+            try {
+                callback(sessionId);
+            } catch (error) {
+                logger.debug('[Session] Error in session found callback:', error);
+            }
+        }
+    }
+
+    /**
+     * Register a callback to be notified when session ID is found
+     */
+    addSessionFoundCallback = (callback: (sessionId: string) => void): void => {
+        this.sessionFoundCallbacks.push(callback);
+    }
+
+    /**
+     * Remove a session found callback
+     */
+    removeSessionFoundCallback = (callback: (sessionId: string) => void): void => {
+        const index = this.sessionFoundCallbacks.indexOf(callback);
+        if (index !== -1) {
+            this.sessionFoundCallbacks.splice(index, 1);
+        }
     }
 
     /**
@@ -98,6 +132,7 @@ export class Session {
      */
     clearSessionId = (): void => {
         this.sessionId = null;
+        this.sessionFoundCallbacks = []; // Clear callbacks when session is cleared
         logger.debug('[Session] Session ID cleared');
     }
 
