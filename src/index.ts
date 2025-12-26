@@ -35,7 +35,7 @@ import { listDaemonSessions, stopDaemonSession, getDaemonHealth } from './daemon
 import { handleAuthCommand } from './commands/auth'
 import { handleConnectCommand } from './commands/connect'
 import { handleCompletionCommand } from './commands/completion'
-import { generateMainHelp, generateCommandHelp } from './commands/registry'
+import { generateMainHelp, generateCommandHelp, EXIT_CODES } from './commands/registry'
 import { spawnHappyCLI } from './utils/spawnHappyCLI'
 import { claudeCliPath } from './claude/claudeLocal'
 import { execFileSync } from 'node:child_process'
@@ -91,7 +91,7 @@ import { initializeTelemetry, showTelemetryNoticeIfNeeded, trackMetric, setTag, 
         console.log('Caffeinate cleanup error:', caffeinateResult.error)
       }
 
-      process.exit(0)
+      process.exit(EXIT_CODES.SUCCESS.code)
     }
     await runDoctorCommand();
     return;
@@ -157,7 +157,7 @@ import { initializeTelemetry, showTelemetryNoticeIfNeeded, trackMetric, setTag, 
       if (!validModels.includes(modelName)) {
         console.error(`Invalid model: ${modelName}`);
         console.error(`Available models: ${validModels.join(', ')}`);
-        process.exit(1);
+        process.exit(EXIT_CODES.GENERAL_ERROR.code);
       }
       
       try {
@@ -192,10 +192,10 @@ import { initializeTelemetry, showTelemetryNoticeIfNeeded, trackMetric, setTag, 
         console.log(`✓ Model set to: ${modelName}`);
         console.log(`  Config saved to: ${configPath}`);
         console.log(`  This model will be used in future sessions.`);
-        process.exit(0);
+        process.exit(EXIT_CODES.SUCCESS.code);
       } catch (error) {
         console.error('Failed to save model configuration:', error);
-        process.exit(1);
+        process.exit(EXIT_CODES.GENERAL_ERROR.code);
       }
     }
     
@@ -231,10 +231,10 @@ import { initializeTelemetry, showTelemetryNoticeIfNeeded, trackMetric, setTag, 
         } else {
           console.log('Current model: gemini-2.5-pro (default)');
         }
-        process.exit(0);
+        process.exit(EXIT_CODES.SUCCESS.code);
       } catch (error) {
         console.error('Failed to read model configuration:', error);
-        process.exit(1);
+        process.exit(EXIT_CODES.GENERAL_ERROR.code);
       }
     }
     
@@ -273,7 +273,7 @@ import { initializeTelemetry, showTelemetryNoticeIfNeeded, trackMetric, setTag, 
       if (process.env.DEBUG) {
         console.error(error)
       }
-      process.exit(1)
+      process.exit(EXIT_CODES.GENERAL_ERROR.code)
     }
     return;
   } else if (subcommand === 'logout') {
@@ -328,7 +328,7 @@ import { initializeTelemetry, showTelemetryNoticeIfNeeded, trackMetric, setTag, 
         console.error(chalk.red('Error: Session ID required'))
         console.log(chalk.gray('Usage: happy daemon stop-session <session-id>'))
         console.log(chalk.gray('List active sessions with: happy daemon list'))
-        process.exit(1)
+        process.exit(EXIT_CODES.GENERAL_ERROR.code)
       }
 
       // Validate UUID format
@@ -337,7 +337,7 @@ import { initializeTelemetry, showTelemetryNoticeIfNeeded, trackMetric, setTag, 
         console.error(chalk.red(`Error: Invalid session ID format: ${sessionId}`))
         console.log(chalk.gray('Expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'))
         console.log(chalk.gray('List active sessions with: happy daemon list'))
-        process.exit(1)
+        process.exit(EXIT_CODES.GENERAL_ERROR.code)
       }
 
       const result = await stopDaemonSession(sessionId)
@@ -393,21 +393,21 @@ import { initializeTelemetry, showTelemetryNoticeIfNeeded, trackMetric, setTag, 
             process.kill(state.pid, 0);
             console.log(chalk.yellow('Daemon process exists but is taking longer to initialize'));
             console.log(chalk.gray('Wait and check: happy daemon status'));
-            process.exit(0);
+            process.exit(EXIT_CODES.SUCCESS.code);
           } catch {
             // Process doesn't exist, true failure
           }
         }
 
-        process.exit(1);
+        process.exit(EXIT_CODES.GENERAL_ERROR.code);
       }
-      process.exit(0);
+      process.exit(EXIT_CODES.SUCCESS.code);
     } else if (daemonSubcommand === 'start-sync') {
       await startDaemon()
-      process.exit(0)
+      process.exit(EXIT_CODES.SUCCESS.code)
     } else if (daemonSubcommand === 'stop') {
       await stopDaemon()
-      process.exit(0)
+      process.exit(EXIT_CODES.SUCCESS.code)
     } else if (daemonSubcommand === 'status') {
       // Check for --json flag (can appear as args[2] or anywhere in remaining args)
       const useJson = args.slice(2).includes('--json');
@@ -420,7 +420,7 @@ import { initializeTelemetry, showTelemetryNoticeIfNeeded, trackMetric, setTag, 
       } else {
         // Human-readable output (existing behavior)
         await runDoctorCommand('daemon');
-        process.exit(0);
+        process.exit(EXIT_CODES.SUCCESS.code);
       }
     } else if (daemonSubcommand === 'health') {
       // Check for --json flag
@@ -436,7 +436,7 @@ import { initializeTelemetry, showTelemetryNoticeIfNeeded, trackMetric, setTag, 
           console.log(chalk.gray(`  ${result.error}`));
           console.log(chalk.gray('  Start with: happy daemon start'));
         }
-        process.exit(1);
+        process.exit(EXIT_CODES.GENERAL_ERROR.code);
       }
 
       const health = result.data;
@@ -482,8 +482,12 @@ ${chalk.gray(`Last checked: ${new Date(health.timestamp).toLocaleString()}`)}
 `);
       }
 
-      // Exit codes: 0 for healthy, 1 for degraded, 2 for unhealthy
-      const exitCode = health.status === 'healthy' ? 0 : health.status === 'degraded' ? 1 : 2;
+      // Exit codes: SUCCESS for healthy, GENERAL_ERROR for degraded, UNHEALTHY for unhealthy
+      const exitCode = health.status === 'healthy'
+        ? EXIT_CODES.SUCCESS.code
+        : health.status === 'degraded'
+          ? EXIT_CODES.GENERAL_ERROR.code
+          : EXIT_CODES.UNHEALTHY.code;
       process.exit(exitCode);
     } else if (daemonSubcommand === 'logs') {
       // Simply print the path to the latest daemon log file
@@ -493,7 +497,7 @@ ${chalk.gray(`Last checked: ${new Date(health.timestamp).toLocaleString()}`)}
       } else {
         console.log(latest.path)
       }
-      process.exit(0)
+      process.exit(EXIT_CODES.SUCCESS.code)
     } else if (daemonSubcommand === 'install') {
       try {
         await install()
@@ -540,7 +544,7 @@ ${chalk.gray(`Last checked: ${new Date(health.timestamp).toLocaleString()}`)}
         console.log(chalk.yellow('Could not retrieve claude help. Make sure claude is installed.'))
       }
 
-      process.exit(0)
+      process.exit(EXIT_CODES.SUCCESS.code)
     }
 
     // Show version
@@ -610,7 +614,7 @@ async function handleNotifyCommand(args: string[]): Promise<void> {
       showHelp = true
     } else {
       console.error(chalk.red(`Unknown argument for notify command: ${arg}`))
-      process.exit(1)
+      process.exit(EXIT_CODES.GENERAL_ERROR.code)
     }
   }
 
@@ -627,14 +631,14 @@ async function handleNotifyCommand(args: string[]): Promise<void> {
   if (!message) {
     console.error(chalk.red('Error: Message is required. Use -p "your message" to specify the notification text.'))
     console.log(chalk.gray('Run "happy notify --help" for usage information.'))
-    process.exit(1)
+    process.exit(EXIT_CODES.GENERAL_ERROR.code)
   }
 
   // Load credentials
   let credentials = await readCredentials()
   if (!credentials) {
     console.error(chalk.red('Error: Not authenticated. Please run "happy auth login" first.'))
-    process.exit(1)
+    process.exit(EXIT_CODES.GENERAL_ERROR.code)
   }
 
   console.log(chalk.blue('📱 Sending push notification...'))

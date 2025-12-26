@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 
 import { ApiClient } from '@/api/api';
 import { logger } from '@/ui/logger';
+import { EXIT_CODES } from '@/commands/registry';
 import { loop } from '@/claude/loop';
 import { AgentState, Metadata } from '@/api/types';
 // @ts-ignore
@@ -79,7 +80,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     let machineId = settings?.machineId
     if (!machineId) {
         console.error(`[START] No machine ID found in settings, which is unexpected since authAndSetupMachineIfNeeded should have created it. Please report this issue on https://github.com/slopus/happy-cli/issues`);
-        process.exit(1);
+        process.exit(EXIT_CODES.GENERAL_ERROR.code);
     }
     logger.debug(`Using machineId: ${machineId}`);
 
@@ -130,7 +131,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         // Handle cancellation with a clean exit
         if (AppError.isAppError(error) && error.code === ErrorCodes.OPERATION_CANCELLED) {
             console.log('Session creation cancelled.');
-            process.exit(0);
+            process.exit(EXIT_CODES.SUCCESS.code);
         }
         throw error;
     }
@@ -393,12 +394,12 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             logger.reportWriteErrorsIfAny();
 
             logger.debug('[START] Cleanup complete, exiting');
-            process.exit(0);
+            process.exit(EXIT_CODES.SUCCESS.code);
         } catch (error) {
             logger.debug('[START] Error during cleanup:', error);
             // Report any logger write errors even on cleanup failure
             logger.reportWriteErrorsIfAny();
-            process.exit(1);
+            process.exit(EXIT_CODES.GENERAL_ERROR.code);
         }
     };
 
@@ -484,5 +485,5 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     logger.reportWriteErrorsIfAny();
 
     // Exit
-    process.exit(0);
+    process.exit(EXIT_CODES.SUCCESS.code);
 }

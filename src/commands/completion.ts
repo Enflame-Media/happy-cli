@@ -11,7 +11,7 @@
 // literal $ characters in the generated shell scripts.
 
 import chalk from 'chalk'
-import { generateCommandHelp } from './registry'
+import { generateCommandHelp, EXIT_CODES } from './registry'
 
 type Shell = 'bash' | 'zsh' | 'fish'
 
@@ -384,6 +384,6 @@ export async function handleCompletionCommand(args: string[]): Promise<void> {
       console.error(chalk.red(`Unknown shell: ${shell}`))
       console.log(chalk.gray('Supported shells: bash, zsh, fish'))
       console.log(chalk.gray('Run "happy completion --help" for usage.'))
-      process.exit(1)
+      process.exit(EXIT_CODES.GENERAL_ERROR.code)
   }
 }

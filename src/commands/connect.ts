@@ -40,7 +40,7 @@ export async function handleConnectCommand(args: string[]): Promise<void> {
         default:
             console.error(chalk.red(`Unknown connect target: ${subcommand}`));
             showConnectHelp();
-            process.exit(1);
+            process.exit(EXIT_CODES.GENERAL_ERROR.code);
     }
 }
 
@@ -79,7 +79,7 @@ async function handleConnectVendor(vendor: 'codex' | 'claude' | 'gemini', displa
     if (!credentials) {
         console.log(chalk.yellow('⚠️  Not authenticated with Happy'));
         console.log(chalk.gray('  Please run "happy auth login" first'));
-        process.exit(1);
+        process.exit(EXIT_CODES.GENERAL_ERROR.code);
     }
 
     // Create API client
@@ -91,19 +91,19 @@ async function handleConnectVendor(vendor: 'codex' | 'claude' | 'gemini', displa
         const codexAuthTokens = await authenticateCodex();
         await api.registerVendorToken('openai', { oauth: codexAuthTokens });
         console.log('✅ Codex token registered with server');
-        process.exit(0);
+        process.exit(EXIT_CODES.SUCCESS.code);
     } else if (vendor === 'claude') {
         console.log('🚀 Registering Anthropic token with server');
         const anthropicAuthTokens = await authenticateClaude(debug);
         await api.registerVendorToken('anthropic', { oauth: anthropicAuthTokens });
         console.log('✅ Anthropic token registered with server');
-        process.exit(0);
+        process.exit(EXIT_CODES.SUCCESS.code);
     } else if (vendor === 'gemini') {
         console.log('🚀 Registering Gemini token with server');
         const geminiAuthTokens = await authenticateGemini();
         await api.registerVendorToken('gemini', { oauth: geminiAuthTokens });
         console.log('✅ Gemini token registered with server');
-        process.exit(0);
+        process.exit(EXIT_CODES.SUCCESS.code);
     } else {
         throw new AppError(ErrorCodes.UNSUPPORTED_OPERATION, `Unsupported vendor: ${vendor}`);
     }

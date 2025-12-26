@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { logger } from '@/ui/logger'
+import { EXIT_CODES } from '@/commands/registry'
 import type { AgentState, CreateSessionResponse, Metadata, Session, Machine, MachineMetadata, DaemonState } from '@/api/types'
 import { ApiSessionClient } from './apiSession';
 import { ApiMachineClient } from './apiMachine';
@@ -197,7 +198,7 @@ export class ApiClient {
         if (response.status !== 200) {
           console.error(chalk.red('[API] Failed to create machine'));
           console.log(chalk.yellow('[API] Failed to create machine. Most likely you have re-authenticated, but you still have a machine associated with the old account. Now we are trying to re-associate the machine with the new account. That is not allowed. Please run \'happy doctor clean\' to clean up your happy state, and try your original command again. Please create an issue on github if this is causing you problems. We apologize for the inconvenience.'));
-          process.exit(1);
+          process.exit(EXIT_CODES.GENERAL_ERROR.code);
         }
 
         const raw = response.data.machine;

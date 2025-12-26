@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { logger } from './logger';
 import { AppError, ErrorCodes, fromUnknownSafe } from '@/utils/errors';
 import { getCorrelationId } from '@/utils/correlationId';
+import { EXIT_CODES } from '@/commands/registry';
 
 async function doAuth(options?: { signal?: AbortSignal }): Promise<Credentials | null> {
     console.clear();
@@ -23,7 +24,7 @@ async function doAuth(options?: { signal?: AbortSignal }): Promise<Credentials |
     const authMethod = await selectAuthenticationMethod();
     if (!authMethod) {
         console.log('\nAuthentication cancelled.\n');
-        process.exit(0);
+        process.exit(EXIT_CODES.SUCCESS.code);
     }
 
     // Generating ephemeral key
@@ -158,7 +159,7 @@ async function waitForAuthentication(keypair: tweetnacl.BoxKeyPair, options?: { 
     const handleInterrupt = () => {
         cancelled = true;
         console.log('\n\nAuthentication cancelled.');
-        process.exit(0);
+        process.exit(EXIT_CODES.SUCCESS.code);
     };
 
     process.on('SIGINT', handleInterrupt);

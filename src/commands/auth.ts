@@ -8,6 +8,7 @@ import { stopDaemon, checkIfDaemonRunningAndCleanupStaleState } from '@/daemon/c
 import { logger } from '@/ui/logger';
 import os from 'node:os';
 import { ErrorCodes, fromUnknownSafe } from '@/utils/errors';
+import { EXIT_CODES } from '@/commands/registry';
 
 export async function handleAuthCommand(args: string[]): Promise<void> {
   const subcommand = args[0];
@@ -30,7 +31,7 @@ export async function handleAuthCommand(args: string[]): Promise<void> {
     default:
       console.error(chalk.red(`Unknown auth subcommand: ${subcommand}`));
       showAuthHelp();
-      process.exit(1);
+      process.exit(EXIT_CODES.GENERAL_ERROR.code);
   }
 }
 
@@ -108,7 +109,7 @@ async function handleAuthLogin(args: string[]): Promise<void> {
     console.log(chalk.gray(`  Machine ID: ${result.machineId}`));
   } catch (error) {
     console.error(chalk.red('Authentication failed:'), error instanceof Error ? error.message : 'Unknown error');
-    process.exit(1);
+    process.exit(EXIT_CODES.GENERAL_ERROR.code);
   }
 }
 

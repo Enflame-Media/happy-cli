@@ -4,6 +4,7 @@ import os from 'os';
 import * as tmp from 'tmp';
 
 import { ApiClient } from '@/api/api';
+import { EXIT_CODES } from '@/commands/registry';
 import type { ApiMachineClient } from '@/api/apiMachine';
 import { TrackedSession } from './types';
 import { MachineMetadata, DaemonState, Metadata } from '@/api/types';
@@ -116,7 +117,7 @@ export async function startDaemon(): Promise<void> {
         // Give time for logs to be flushed
         await new Promise(resolve => setTimeout(resolve, 100))
 
-        process.exit(1);
+        process.exit(EXIT_CODES.GENERAL_ERROR.code);
       }, 1_000);
 
       // Start graceful shutdown
@@ -181,7 +182,7 @@ export async function startDaemon(): Promise<void> {
   } else {
     logger.debug('[DAEMON RUN] Daemon version matches, keeping existing daemon');
     console.log('Daemon already running with matching version');
-    process.exit(0);
+    process.exit(EXIT_CODES.SUCCESS.code);
   }
 
   // Acquire exclusive lock (proves daemon is running)
@@ -189,7 +190,7 @@ export async function startDaemon(): Promise<void> {
   if (!daemonLockHandle) {
     logger.debug('[DAEMON RUN] Daemon lock file already held, another daemon is running');
     console.log('Another daemon instance is already running (lock file held)');
-    process.exit(0);
+    process.exit(EXIT_CODES.SUCCESS.code);
   }
 
   // At this point we should be safe to startup the daemon:
@@ -733,7 +734,7 @@ export async function startDaemon(): Promise<void> {
           // So we can just hang forever - waiting for the new daemon to kill us
           logger.debug('[DAEMON RUN] Hanging for a bit - waiting for CLI to kill us because we are running outdated version of the code');
           await new Promise(resolve => setTimeout(resolve, 10_000));
-          process.exit(0);
+          process.exit(EXIT_CODES.SUCCESS.code);
         }
 
         // Don't check state file PID - lock file is the authority (HAP-51)
@@ -869,7 +870,7 @@ export async function startDaemon(): Promise<void> {
       // The lock file will remain with our PID; new daemons will detect the stale lock
       // (dead PID) and clean it up atomically before acquiring their own lock.
       logger.debug('[DAEMON RUN] Cleanup completed, exiting process (lock released by OS on exit)');
-      process.exit(0);
+      process.exit(EXIT_CODES.SUCCESS.code);
     };
 
     logger.debug('[DAEMON RUN] Daemon started successfully, waiting for shutdown request');
@@ -879,6 +880,6 @@ export async function startDaemon(): Promise<void> {
     await cleanupAndShutdown(shutdownRequest.source, shutdownRequest.errorMessage);
   } catch (error) {
     logger.debug('[DAEMON RUN][FATAL] Failed somewhere unexpectedly - exiting with code 1', error);
-    process.exit(1);
+    process.exit(EXIT_CODES.GENERAL_ERROR.code);
   }
 }
