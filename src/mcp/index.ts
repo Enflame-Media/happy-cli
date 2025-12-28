@@ -71,20 +71,28 @@ program
 
 program
     .command('enable <name>')
-    .description('Enable a disabled MCP server')
-    .action(async (name: string) => {
-        // Stub for future implementation
-        console.log(`Enabling MCP server '${name}'`);
-        console.log('This feature is coming soon.');
+    .description('Enable a disabled MCP server or tool')
+    .option('--tool <tool>', 'Enable a specific tool within the server')
+    .option('--scope <scope>', 'Config scope (user|project)', 'user')
+    .action(async (name: string, options: { tool?: string; scope: string }) => {
+        const { enableCommand } = await import('./commands/toggle.js');
+        await enableCommand(name, {
+            tool: options.tool,
+            scope: options.scope as 'user' | 'project',
+        });
     });
 
 program
     .command('disable <name>')
-    .description('Disable an MCP server without removing it')
-    .action(async (name: string) => {
-        // Stub for future implementation
-        console.log(`Disabling MCP server '${name}'`);
-        console.log('This feature is coming soon.');
+    .description('Disable an MCP server or tool without removing it')
+    .option('--tool <tool>', 'Disable a specific tool within the server')
+    .option('--scope <scope>', 'Config scope (user|project)', 'user')
+    .action(async (name: string, options: { tool?: string; scope: string }) => {
+        const { disableCommand } = await import('./commands/toggle.js');
+        await disableCommand(name, {
+            tool: options.tool,
+            scope: options.scope as 'user' | 'project',
+        });
     });
 
 program
