@@ -96,16 +96,22 @@ program
     });
 
 program
+    .command('tools <name>')
+    .description('List all tools from an MCP server')
+    .action(async (name: string) => {
+        const { toolsCommand } = await import('./commands/tools.js');
+        await toolsCommand(name);
+    });
+
+program
     .command('validate [name]')
     .description('Validate MCP server configuration and connectivity')
-    .action(async (name?: string) => {
-        // Stub for future implementation
-        if (name) {
-            console.log(`Validating MCP server '${name}'`);
-        } else {
-            console.log('Validating all MCP servers');
-        }
-        console.log('This feature is coming soon.');
+    .option('--scope <scope>', 'Config scope for metadata update (user|project)', 'user')
+    .action(async (name: string | undefined, options: { scope: string }) => {
+        const { validateCommand } = await import('./commands/validate.js');
+        await validateCommand(name, {
+            scope: options.scope as 'user' | 'project',
+        });
     });
 
 /**
