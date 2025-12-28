@@ -10,7 +10,7 @@
  * happy mcp              # Show help
  * happy mcp --help       # Show help
  * happy mcp list         # List configured servers
- * happy mcp add <name>   # Add a new server (coming soon)
+ * happy mcp add <name> -- <command> [args...]  # Add a new server
  * ```
  */
 
@@ -39,19 +39,34 @@ program
     .description('Add a new MCP server')
     .option('--scope <scope>', 'Config scope (user|project)', 'user')
     .option('--env <env...>', 'Environment variables (KEY=VALUE)')
-    .action(async (name: string, options: { scope: string; env?: string[] }) => {
-        // Stub for future implementation
-        console.log(`Adding MCP server '${name}' with scope '${options.scope}'`);
-        console.log('This feature is coming soon.');
+    .allowUnknownOption(true)
+    .action(async (name: string, options: { scope: string; env?: string[] }, command) => {
+        const { addCommand } = await import('./commands/add.js');
+
+        // Parse command args after '--' separator
+        // Commander stores raw args in command.parent.rawArgs for the full program
+        // We need to extract everything after '--' from the original args
+        const rawArgs = command.parent?.rawArgs ?? process.argv;
+        const dashDashIndex = rawArgs.indexOf('--');
+        const commandArgs = dashDashIndex !== -1 ? rawArgs.slice(dashDashIndex + 1) : [];
+
+        await addCommand(name, commandArgs, {
+            scope: options.scope as 'user' | 'project',
+            env: options.env,
+        });
     });
 
 program
     .command('remove <name>')
     .description('Remove an MCP server')
-    .action(async (name: string) => {
-        // Stub for future implementation
-        console.log(`Removing MCP server '${name}'`);
-        console.log('This feature is coming soon.');
+    .option('--force', 'Skip confirmation prompt')
+    .option('--scope <scope>', 'Config scope (user|project)', 'user')
+    .action(async (name: string, options: { force?: boolean; scope: string }) => {
+        const { removeCommand } = await import('./commands/remove.js');
+        await removeCommand(name, {
+            force: options.force,
+            scope: options.scope as 'user' | 'project',
+        });
     });
 
 program
