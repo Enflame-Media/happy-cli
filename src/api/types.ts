@@ -23,6 +23,8 @@ import type {
   ApiEphemeralUpdate,
 } from '@happy/protocol'
 
+import { McpSyncStateSchema } from '@happy/protocol'
+
 // =============================================================================
 // TYPE ALIASES (For internal use)
 // =============================================================================
@@ -193,6 +195,9 @@ export type MachineMetadata = z.infer<typeof MachineMetadataSchema>
 
 /**
  * Daemon state - dynamic runtime information (frequently updated)
+ *
+ * Includes optional mcpConfig for syncing MCP server state to the mobile app.
+ * @see HAP-608 - CLI Sync: Include MCP Config in daemonState
  */
 const DaemonStateSchema = z.object({
   status: z.union([
@@ -207,7 +212,9 @@ const DaemonStateSchema = z.object({
     z.union([
       z.enum(['mobile-app', 'cli', 'os-signal', 'unknown']),
       z.string() // Forward compatibility
-    ]).optional()
+    ]).optional(),
+  /** MCP configuration state for app display - synced from ~/.happy/config/mcp.json */
+  mcpConfig: McpSyncStateSchema.optional()
 })
 
 export type DaemonState = z.infer<typeof DaemonStateSchema>

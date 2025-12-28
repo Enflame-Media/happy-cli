@@ -29,6 +29,7 @@ import {
     getMergedMcpServers,
     getEnabledMcpServers,
     hasMcpConfig,
+    buildMcpSyncState,
 } from './config';
 import { DEFAULT_MCP_CONFIG, type HappyMcpConfig } from './types';
 import * as os from 'os';
@@ -588,6 +589,106 @@ describe('MCP Config Module', () => {
             // codex-only server should be present for codex agent
             expect(merged['codex-only']).toBeDefined();
             expect(merged['codex-only'].command).toBe('codex-server');
+        });
+    });
+
+    describe('buildMcpSyncState', () => {
+        it('should return undefined when no MCP config exists', () => {
+            vi.spyOn(process, 'cwd').mockReturnValue(fakeProject);
+
+            const syncState = buildMcpSyncState();
+            expect(syncState).toBeUndefined();
+        });
+
+        it('should return undefined when config exists but has no servers', () => {
+            vi.spyOn(process, 'cwd').mockReturnValue(fakeProject);
+
+            const emptyConfig: HappyMcpConfig = {
+                version: 1,
+                mcpServers: {},
+            };
+
+            const userConfigDir = join(fakeHome, '.happy', 'config');
+            mkdirSync(userConfigDir, { recursive: true });
+            writeFileSync(join(userConfigDir, 'mcp.json'), JSON.stringify(emptyConfig));
+
+            const syncState = buildMcpSyncState();
+            expect(syncState).toBeUndefined();
+        });
+
+        it('should build sync state with server info', () => {
+            vi.spyOn(process, 'cwd').mockReturnValue(fakeProject);
+
+            const configWithServers: HappyMcpConfig = {
+                version: 1,
+                mcpServers: {
+                    'test-server': {
+                        command: 'test',
+                        disabled: false,
+                        disabledTools: ['tool1', 'tool2'],
+                        autoApprove: [],
+                        timeout: 5000,
+                        metadata: {
+                            addedAt: '2024-12-28T00:00:00.000Z',
+                            toolCount: 10,
+                            lastValidated: '2024-12-28T01:00:00.000Z',
+                        },
+                    },
+                    'disabled-server': {
+                        command: 'disabled',
+                        disabled: true,
+                        disabledTools: [],
+                        autoApprove: [],
+                        timeout: 5000,
+                    },
+                },
+            };
+
+            const userConfigDir = join(fakeHome, '.happy', 'config');
+            mkdirSync(userConfigDir, { recursive: true });
+            writeFileSync(join(userConfigDir, 'mcp.json'), JSON.stringify(configWithServers));
+
+            const syncState = buildMcpSyncState();
+
+            expect(syncState).toBeDefined();
+            expect(syncState!.servers['test-server']).toEqual({
+                disabled: false,
+                toolCount: 10,
+                lastValidated: '2024-12-28T01:00:00.000Z',
+                disabledTools: ['tool1', 'tool2'],
+            });
+            expect(syncState!.servers['disabled-server']).toEqual({
+                disabled: true,
+                toolCount: undefined,
+                lastValidated: undefined,
+                disabledTools: undefined,
+            });
+        });
+
+        it('should not include empty disabledTools array', () => {
+            vi.spyOn(process, 'cwd').mockReturnValue(fakeProject);
+
+            const config: HappyMcpConfig = {
+                version: 1,
+                mcpServers: {
+                    'server': {
+                        command: 'test',
+                        disabled: false,
+                        disabledTools: [], // Empty array
+                        autoApprove: [],
+                        timeout: 5000,
+                    },
+                },
+            };
+
+            const userConfigDir = join(fakeHome, '.happy', 'config');
+            mkdirSync(userConfigDir, { recursive: true });
+            writeFileSync(join(userConfigDir, 'mcp.json'), JSON.stringify(config));
+
+            const syncState = buildMcpSyncState();
+
+            expect(syncState).toBeDefined();
+            expect(syncState!.servers['server'].disabledTools).toBeUndefined();
         });
     });
 });

@@ -320,3 +320,61 @@ export function getEnabledMcpServers(
 export function hasMcpConfig(): boolean {
     return existsSync(getMcpConfigPath('user')) || existsSync(getMcpConfigPath('project'));
 }
+
+/**
+ * Build MCP sync state for daemon state transmission to the app.
+ *
+ * Transforms the local HappyMcpConfig into the protocol's McpSyncState format
+ * for syncing to connected mobile apps via daemonState.
+ *
+ * @see HAP-608 - CLI Sync: Include MCP Config in daemonState
+ * @returns McpSyncState containing server states, or undefined if no config exists
+ *
+ * @example
+ * ```typescript
+ * const mcpConfig = buildMcpSyncState();
+ * if (mcpConfig) {
+ *     daemonState.mcpConfig = mcpConfig;
+ * }
+ * ```
+ */
+export function buildMcpSyncState(): {
+    servers: Record<string, {
+        disabled: boolean;
+        toolCount?: number;
+        lastValidated?: string;
+        disabledTools?: string[];
+    }>;
+} | undefined {
+    // If no MCP config exists, return undefined (no servers configured)
+    if (!hasMcpConfig()) {
+        return undefined;
+    }
+
+    // Get merged servers from both user and project configs
+    const servers = getMergedMcpServers();
+
+    // If no servers configured, return undefined
+    if (Object.keys(servers).length === 0) {
+        return undefined;
+    }
+
+    // Transform to sync state format
+    const syncServers: Record<string, {
+        disabled: boolean;
+        toolCount?: number;
+        lastValidated?: string;
+        disabledTools?: string[];
+    }> = {};
+
+    for (const [name, config] of Object.entries(servers)) {
+        syncServers[name] = {
+            disabled: config.disabled ?? false,
+            toolCount: config.metadata?.toolCount,
+            lastValidated: config.metadata?.lastValidated,
+            disabledTools: config.disabledTools?.length ? config.disabledTools : undefined,
+        };
+    }
+
+    return { servers: syncServers };
+}

@@ -15,6 +15,7 @@ import { backoff } from '@/utils/time';
 import { RpcHandlerManager } from './rpc/RpcHandlerManager';
 import { HappyWebSocket, WebSocketMetrics } from './HappyWebSocket';
 import type { MetadataUpdateResponse, DaemonStateUpdateResponse } from './socketUtils';
+import { buildMcpSyncState } from '@/mcp/config';
 
 // Keep-alive timing configuration (prevents thundering herd on reconnection)
 const KEEP_ALIVE_BASE_INTERVAL_MS = 20000; // 20 seconds base interval
@@ -240,12 +241,14 @@ export class ApiMachineClient {
             // Update daemon state to running
             // We need to override previous state because the daemon (this process)
             // has restarted with new PID & port
+            // @see HAP-608 - Include MCP config in daemon state sync
             this.updateDaemonState((state) => ({
                 ...state,
                 status: 'running',
                 pid: process.pid,
                 httpPort: this.machine.daemonState?.httpPort,
-                startedAt: Date.now()
+                startedAt: Date.now(),
+                mcpConfig: buildMcpSyncState()
             }));
 
 

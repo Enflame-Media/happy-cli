@@ -23,6 +23,7 @@ import { AppError, ErrorCodes } from '@/utils/errors';
 
 import { cleanupDaemonState, isDaemonRunningCurrentlyInstalledHappyVersion, stopDaemon } from './controlClient';
 import { startDaemonControlServer } from './controlServer';
+import { buildMcpSyncState } from '@/mcp/config';
 import { readFileSync, watch, type FSWatcher } from 'fs';
 import { join } from 'path';
 import { projectPath } from '@/projectPath';
@@ -614,12 +615,14 @@ export async function startDaemon(): Promise<void> {
     writeDaemonState(fileState);
     logger.debug('[DAEMON RUN] Daemon state written');
 
-    // Prepare initial daemon state
+    // Prepare initial daemon state (including MCP config if available)
+    // @see HAP-608 - CLI Sync: Include MCP Config in daemonState
     const initialDaemonState: DaemonState = {
       status: 'offline',
       pid: process.pid,
       httpPort: controlPort,
-      startedAt: Date.now()
+      startedAt: Date.now(),
+      mcpConfig: buildMcpSyncState()
     };
 
     // Create API client
