@@ -9,8 +9,11 @@ import type { CodexSessionConfig, CodexToolResponse } from './types';
 import { z } from 'zod';
 import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { CodexPermissionHandler } from './utils/permissionHandler';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { AppError, ErrorCodes } from '@/utils/errors';
+
+/** Timeout for version check commands (10 seconds) */
+const VERSION_CHECK_TIMEOUT_MS = 10000;
 
 const DEFAULT_TIMEOUT = 14 * 24 * 60 * 60 * 1000; // 14 days, which is the half of the maximum possible timeout (~28 days for int32 value in NodeJS)
 
@@ -20,7 +23,11 @@ const DEFAULT_TIMEOUT = 14 * 24 * 60 * 60 * 1000; // 14 days, which is the half 
  */
 function getCodexMcpCommand(): string {
     try {
-        const version = execSync('codex --version', { encoding: 'utf8' }).trim();
+        // Use execFileSync for security (no shell expansion) and add timeout to prevent hangs
+        const version = execFileSync('codex', ['--version'], {
+            encoding: 'utf8',
+            timeout: VERSION_CHECK_TIMEOUT_MS,
+        }).trim();
         const match = version.match(/codex-cli\s+(\d+\.\d+\.\d+(?:-alpha\.\d+)?)/);
         if (!match) return 'mcp-server'; // Default to newer command if we can't parse
 
@@ -39,7 +46,14 @@ function getCodexMcpCommand(): string {
         }
         return 'mcp'; // Older versions use mcp
     } catch (error) {
-        logger.debug('[CodexMCP] Error detecting codex version, defaulting to mcp-server:', error);
+        // Check if this was a timeout error for better logging
+        // When a command is killed due to timeout, the error object has killed=true and signal='SIGTERM'
+        const isTimeoutError = error && typeof error === 'object' && 'killed' in error && (error as { killed: boolean }).killed;
+        if (isTimeoutError) {
+            logger.debug('[CodexMCP] codex --version timed out after 10s, defaulting to mcp-server');
+        } else {
+            logger.debug('[CodexMCP] Error detecting codex version, defaulting to mcp-server:', error);
+        }
         return 'mcp-server'; // Default to newer command
     }
 }

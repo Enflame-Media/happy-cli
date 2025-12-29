@@ -8,7 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { logger } from '@/ui/logger';
 import { GEMINI_MODEL_ENV, DEFAULT_GEMINI_MODEL } from '../constants';
 
@@ -71,7 +71,8 @@ export function readGeminiLocalConfig(): GeminiLocalConfig {
   // Gemini CLI might use gcloud auth application-default print-access-token
   if (!token) {
     try {
-      const gcloudToken = execSync('gcloud auth application-default print-access-token', { 
+      // Use execFileSync for security (no shell expansion)
+      const gcloudToken = execFileSync('gcloud', ['auth', 'application-default', 'print-access-token'], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
         timeout: 5000

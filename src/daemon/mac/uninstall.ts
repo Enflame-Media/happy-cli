@@ -9,8 +9,11 @@
  */
 
 import { existsSync, unlinkSync } from 'fs';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { logger } from '@/ui/logger';
+
+/** Timeout for launchctl commands (30 seconds) */
+const LAUNCHCTL_TIMEOUT_MS = 30000;
 
 const PLIST_LABEL = 'com.happy-cli.daemon';
 const PLIST_FILE = `/Library/LaunchDaemons/${PLIST_LABEL}.plist`;
@@ -25,10 +28,14 @@ export async function uninstall(): Promise<void> {
         
         // Unload the daemon
         try {
-            execSync(`launchctl unload ${PLIST_FILE}`, { stdio: 'inherit' });
+            // Use execFileSync for security (no shell expansion) and add timeout to prevent hangs
+            execFileSync('launchctl', ['unload', PLIST_FILE], {
+                stdio: 'inherit',
+                timeout: LAUNCHCTL_TIMEOUT_MS,
+            });
             logger.info('Daemon stopped successfully');
         } catch {
-            // Daemon might not be loaded, continue with removal
+            // Daemon might not be loaded or timed out, continue with removal
             logger.info('Failed to unload daemon (it might not be running)');
         }
         

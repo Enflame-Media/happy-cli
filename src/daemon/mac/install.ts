@@ -13,8 +13,11 @@
  */
 
 import { writeFileSync, chmodSync, existsSync } from 'fs';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { logger } from '@/ui/logger';
+
+/** Timeout for launchctl commands (30 seconds) */
+const LAUNCHCTL_TIMEOUT_MS = 30000;
 import os from 'os';
 import plist from 'plist';
 
@@ -28,7 +31,11 @@ export async function install(): Promise<void> {
         // Check if already installed
         if (existsSync(PLIST_FILE)) {
             logger.info('Daemon plist already exists. Uninstalling first...');
-            execSync(`launchctl unload ${PLIST_FILE}`, { stdio: 'inherit' });
+            // Use execFileSync for security (no shell expansion) and add timeout to prevent hangs
+            execFileSync('launchctl', ['unload', PLIST_FILE], {
+                stdio: 'inherit',
+                timeout: LAUNCHCTL_TIMEOUT_MS,
+            });
         }
 
         // Get the path to the happy CLI executable
@@ -59,7 +66,11 @@ export async function install(): Promise<void> {
         logger.info(`Created daemon plist at ${PLIST_FILE}`);
 
         // Load the daemon
-        execSync(`launchctl load ${PLIST_FILE}`, { stdio: 'inherit' });
+        // Use execFileSync for security (no shell expansion) and add timeout to prevent hangs
+        execFileSync('launchctl', ['load', PLIST_FILE], {
+            stdio: 'inherit',
+            timeout: LAUNCHCTL_TIMEOUT_MS,
+        });
 
         logger.info('Daemon installed and started successfully');
         logger.info('Check logs at ~/.enfm-happy/daemon.log');

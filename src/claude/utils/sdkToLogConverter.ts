@@ -4,7 +4,10 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { execSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
+
+/** Timeout for git commands (5 seconds - git is fast) */
+const GIT_COMMAND_TIMEOUT_MS = 5000
 import type {
     SDKMessage,
     SDKUserMessage,
@@ -69,13 +72,16 @@ export interface ConversionContext {
  */
 function getGitBranch(cwd: string): string | undefined {
     try {
-        const branch = execSync('git rev-parse --abbrev-ref HEAD', {
+        // Use execFileSync for security (no shell expansion) and add timeout to prevent hangs
+        const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
             cwd,
             encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'ignore']
+            stdio: ['ignore', 'pipe', 'ignore'],
+            timeout: GIT_COMMAND_TIMEOUT_MS,
         }).trim()
         return branch || undefined
     } catch {
+        // git command failed or timed out
         return undefined
     }
 }

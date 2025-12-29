@@ -6,9 +6,12 @@
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { existsSync } from 'node:fs'
-import { execSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { logger } from '@/ui/logger'
+
+/** Timeout for version check commands (10 seconds) */
+const VERSION_CHECK_TIMEOUT_MS = 10000
 
 /**
  * Get the directory path of the current module
@@ -23,11 +26,13 @@ const __dirname = join(__filename, '..')
 function getGlobalClaudeVersion(): string | null {
     try {
         const cleanEnv = getCleanEnv()
-        const output = execSync('claude --version', { 
-            encoding: 'utf8', 
+        // Use execFileSync for security (no shell expansion) and add timeout to prevent hangs
+        const output = execFileSync('claude', ['--version'], {
+            encoding: 'utf8',
             stdio: ['pipe', 'pipe', 'pipe'],
             cwd: homedir(),
-            env: cleanEnv
+            env: cleanEnv,
+            timeout: VERSION_CHECK_TIMEOUT_MS,
         }).trim()
         // Output format: "2.0.54 (Claude Code)" or similar
         const match = output.match(/(\d+\.\d+\.\d+)/)
@@ -80,33 +85,37 @@ function findGlobalClaudePath(): string | null {
     
     // PRIMARY: Check if 'claude' command works directly from home dir with clean PATH
     try {
-        execSync('claude --version', { 
-            encoding: 'utf8', 
+        // Use execFileSync for security (no shell expansion) and add timeout to prevent hangs
+        execFileSync('claude', ['--version'], {
+            encoding: 'utf8',
             stdio: ['pipe', 'pipe', 'pipe'],
             cwd: homeDir,
-            env: cleanEnv
+            env: cleanEnv,
+            timeout: VERSION_CHECK_TIMEOUT_MS,
         })
         logger.debug('[Claude SDK] Global claude command available (checked with clean PATH)')
         return 'claude'
     } catch {
-        // claude command not available globally
+        // claude command not available globally or timed out
     }
 
     // FALLBACK for Unix: try which to get actual path
     if (process.platform !== 'win32') {
         try {
-            const result = execSync('which claude', { 
-                encoding: 'utf8', 
+            // Use execFileSync for security (no shell expansion) and add timeout to prevent hangs
+            const result = execFileSync('which', ['claude'], {
+                encoding: 'utf8',
                 stdio: ['pipe', 'pipe', 'pipe'],
                 cwd: homeDir,
-                env: cleanEnv
+                env: cleanEnv,
+                timeout: VERSION_CHECK_TIMEOUT_MS,
             }).trim()
             if (result && existsSync(result)) {
                 logger.debug(`[Claude SDK] Found global claude path via which: ${result}`)
                 return result
             }
         } catch {
-            // which didn't find it
+            // which didn't find it or timed out
         }
     }
     
