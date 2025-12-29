@@ -458,6 +458,8 @@ export async function startDaemon(): Promise<void> {
         // Add --resume flag to continue an existing session (Claude only - Codex doesn't support this)
         // When sessionId is provided, Claude will fork the session, creating a new session ID
         // with the full conversation history from the original session
+        // HAP-649: Track the original session ID to return as 'resumedFrom' in the response
+        let resumedFromSessionId: string | undefined;
         if (options.sessionId) {
           if (options.agent === 'codex') {
             logger.debug(`[DAEMON RUN] Ignoring sessionId for Codex (resume not supported)`);
@@ -475,6 +477,8 @@ export async function startDaemon(): Promise<void> {
             // Normalize to UUID format for Claude's --resume flag
             const normalizedSessionId = normalizeSessionId(options.sessionId);
             args.push('--resume', normalizedSessionId);
+            // HAP-649: Store original session ID to include in response
+            resumedFromSessionId = options.sessionId;
             logger.debug(`[DAEMON RUN] Resuming session with --resume ${normalizedSessionId}${normalizedSessionId !== options.sessionId ? ` (normalized from ${options.sessionId})` : ''}`);
           }
         }
@@ -550,6 +554,8 @@ export async function startDaemon(): Promise<void> {
             resolve({
               type: 'success',
               sessionId: `PID-${happyProcess.pid}`,
+              // HAP-649: Include resumedFrom if this was a resume request
+              ...(resumedFromSessionId && { resumedFrom: resumedFromSessionId }),
               message: 'Session starting slowly. Check daemon logs for status.'
             });
           }, effectiveTimeout);
@@ -560,7 +566,9 @@ export async function startDaemon(): Promise<void> {
             logger.debug(`[DAEMON RUN] Session ${completedSession.happySessionId} fully spawned with webhook`);
             resolve({
               type: 'success',
-              sessionId: completedSession.happySessionId!
+              sessionId: completedSession.happySessionId!,
+              // HAP-649: Include resumedFrom if this was a resume request
+              ...(resumedFromSessionId && { resumedFrom: resumedFromSessionId })
             });
           });
         });
