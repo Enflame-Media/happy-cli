@@ -31,6 +31,7 @@ import { validateHeartbeatInterval } from '@/utils/validators';
 import { createDefaultMemoryMonitor, MemoryMonitorHandle } from './memoryMonitor';
 import { clearGlobalDeduplicator } from '@/utils/requestDeduplication';
 import { addBreadcrumb, setTag, trackMetric, shutdownTelemetry } from '@/telemetry';
+import { isValidSessionId, normalizeSessionId } from '@/claude/utils/sessionValidation';
 
 // Version cache for package.json (HAP-354)
 // Eliminates repetitive disk I/O during heartbeat checks
@@ -460,18 +461,20 @@ export async function startDaemon(): Promise<void> {
           if (options.agent === 'codex') {
             logger.debug(`[DAEMON RUN] Ignoring sessionId for Codex (resume not supported)`);
           } else {
-            // Validate UUID format (Claude uses UUIDs for session IDs)
-            const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-            if (!uuidRegex.test(options.sessionId)) {
+            // Validate session ID format (accepts both UUID and hex formats)
+            // Claude Code uses hex format (32 chars), Happy uses UUID format (36 chars with hyphens)
+            if (!isValidSessionId(options.sessionId)) {
               logger.debug(`[DAEMON RUN] Invalid sessionId format: ${options.sessionId}`);
               return {
                 type: 'error',
-                errorMessage: `Invalid session ID format. Expected UUID, got: ${options.sessionId}`
+                errorMessage: `Invalid session ID format. Expected UUID (36 chars) or hex (32 chars), got: ${options.sessionId}`
               };
             }
 
-            args.push('--resume', options.sessionId);
-            logger.debug(`[DAEMON RUN] Resuming session with --resume ${options.sessionId}`);
+            // Normalize to UUID format for Claude's --resume flag
+            const normalizedSessionId = normalizeSessionId(options.sessionId);
+            args.push('--resume', normalizedSessionId);
+            logger.debug(`[DAEMON RUN] Resuming session with --resume ${normalizedSessionId}${normalizedSessionId !== options.sessionId ? ` (normalized from ${options.sessionId})` : ''}`);
           }
         }
 

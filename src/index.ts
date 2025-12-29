@@ -38,6 +38,7 @@ import { handleCompletionCommand } from './commands/completion'
 import { generateMainHelp, generateCommandHelp, EXIT_CODES } from './commands/registry'
 import { spawnHappyCLI } from './utils/spawnHappyCLI'
 import { claudeCliPath } from './claude/claudeLocal'
+import { isValidSessionId } from './claude/utils/sessionValidation'
 import { execFileSync } from 'node:child_process'
 import { checkForUpdatesAndNotify } from './utils/checkForUpdates'
 import { initializeTelemetry, showTelemetryNoticeIfNeeded, trackMetric, setTag, addBreadcrumb, shutdownTelemetry } from './telemetry'
@@ -344,11 +345,10 @@ import { initializeTelemetry, showTelemetryNoticeIfNeeded, trackMetric, setTag, 
         process.exit(EXIT_CODES.GENERAL_ERROR.code)
       }
 
-      // Validate UUID format
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-      if (!uuidRegex.test(sessionId)) {
+      // Validate session ID format (accepts both UUID and hex formats)
+      if (!isValidSessionId(sessionId)) {
         console.error(chalk.red(`Error: Invalid session ID format: ${sessionId}`))
-        console.log(chalk.gray('Expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'))
+        console.log(chalk.gray('Expected format: UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx) or hex (32 characters)'))
         console.log(chalk.gray('List active sessions with: happy daemon list'))
         process.exit(EXIT_CODES.GENERAL_ERROR.code)
       }

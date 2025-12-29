@@ -3,6 +3,10 @@ import {
     validateSessionId,
     getValidatedSessionPath,
     isValidSessionId,
+    isHexSessionId,
+    hexToUuid,
+    uuidToHex,
+    normalizeSessionId,
     InvalidSessionIdError
 } from './sessionValidation';
 
@@ -79,10 +83,81 @@ describe('sessionValidation', () => {
             expect(isValidSessionId('93a9705e-bc6a-406d-8dce-8acc014dedbd')).toBe(true);
         });
 
+        it('should return true for valid hex session IDs (32 chars)', () => {
+            expect(isValidSessionId('bb6ca0a457344204ada77aa2c27473c5')).toBe(true);
+            expect(isValidSessionId('BB6CA0A457344204ADA77AA2C27473C5')).toBe(true);
+        });
+
         it('should return false for invalid IDs without throwing', () => {
             expect(isValidSessionId('../etc/passwd')).toBe(false);
             expect(isValidSessionId('not-a-uuid')).toBe(false);
             expect(isValidSessionId('')).toBe(false);
+        });
+    });
+
+    describe('isHexSessionId', () => {
+        it('should return true for valid 32-char hex strings', () => {
+            expect(isHexSessionId('bb6ca0a457344204ada77aa2c27473c5')).toBe(true);
+            expect(isHexSessionId('BB6CA0A457344204ADA77AA2C27473C5')).toBe(true);
+            expect(isHexSessionId('f7df87cf91644819924704c6ed07dada')).toBe(true);
+        });
+
+        it('should return false for UUIDs with hyphens', () => {
+            expect(isHexSessionId('93a9705e-bc6a-406d-8dce-8acc014dedbd')).toBe(false);
+        });
+
+        it('should return false for wrong length strings', () => {
+            expect(isHexSessionId('bb6ca0a457344204ada77aa2c27473c')).toBe(false); // 31 chars
+            expect(isHexSessionId('bb6ca0a457344204ada77aa2c27473c5a')).toBe(false); // 33 chars
+        });
+
+        it('should return false for non-hex characters', () => {
+            expect(isHexSessionId('gg6ca0a457344204ada77aa2c27473c5')).toBe(false);
+        });
+    });
+
+    describe('hexToUuid', () => {
+        it('should convert hex to UUID format', () => {
+            expect(hexToUuid('bb6ca0a457344204ada77aa2c27473c5')).toBe('bb6ca0a4-5734-4204-ada7-7aa2c27473c5');
+            expect(hexToUuid('BB6CA0A457344204ADA77AA2C27473C5')).toBe('bb6ca0a4-5734-4204-ada7-7aa2c27473c5');
+        });
+
+        it('should throw for invalid hex IDs', () => {
+            expect(() => hexToUuid('not-valid-hex')).toThrow(InvalidSessionIdError);
+            expect(() => hexToUuid('93a9705e-bc6a-406d-8dce-8acc014dedbd')).toThrow(InvalidSessionIdError);
+        });
+    });
+
+    describe('uuidToHex', () => {
+        it('should convert UUID to hex format', () => {
+            expect(uuidToHex('93a9705e-bc6a-406d-8dce-8acc014dedbd')).toBe('93a9705ebc6a406d8dce8acc014dedbd');
+            expect(uuidToHex('93A9705E-BC6A-406D-8DCE-8ACC014DEDBD')).toBe('93a9705ebc6a406d8dce8acc014dedbd');
+        });
+
+        it('should throw for invalid UUIDs', () => {
+            expect(() => uuidToHex('not-a-uuid')).toThrow(InvalidSessionIdError);
+            expect(() => uuidToHex('bb6ca0a457344204ada77aa2c27473c5')).toThrow(InvalidSessionIdError);
+        });
+    });
+
+    describe('normalizeSessionId', () => {
+        it('should pass through valid UUIDs', () => {
+            expect(normalizeSessionId('93a9705e-bc6a-406d-8dce-8acc014dedbd')).toBe('93a9705e-bc6a-406d-8dce-8acc014dedbd');
+        });
+
+        it('should lowercase UUIDs', () => {
+            expect(normalizeSessionId('93A9705E-BC6A-406D-8DCE-8ACC014DEDBD')).toBe('93a9705e-bc6a-406d-8dce-8acc014dedbd');
+        });
+
+        it('should convert hex IDs to UUID format', () => {
+            expect(normalizeSessionId('bb6ca0a457344204ada77aa2c27473c5')).toBe('bb6ca0a4-5734-4204-ada7-7aa2c27473c5');
+            expect(normalizeSessionId('BB6CA0A457344204ADA77AA2C27473C5')).toBe('bb6ca0a4-5734-4204-ada7-7aa2c27473c5');
+        });
+
+        it('should throw for invalid session IDs', () => {
+            expect(() => normalizeSessionId('not-valid')).toThrow(InvalidSessionIdError);
+            expect(() => normalizeSessionId('')).toThrow(InvalidSessionIdError);
+            expect(() => normalizeSessionId('../etc/passwd')).toThrow(InvalidSessionIdError);
         });
     });
 
