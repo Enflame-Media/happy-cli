@@ -293,15 +293,15 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
             switch (data.type) {
                 case 'activity':
                     // Session activity update - currently handled elsewhere via keep-alive
-                    logger.debug(`[EPHEMERAL] Activity: session ${data.id} active=${data.active} thinking=${data.thinking}`);
+                    logger.debug(`[EPHEMERAL] Activity: session ${data.sid} active=${data.active} thinking=${data.thinking}`);
                     break;
                 case 'usage':
                     // Real-time usage/cost update from server
-                    logger.debug(`[EPHEMERAL] Usage: session ${data.id} cost=$${data.cost.total.toFixed(4)} tokens=${data.tokens.total}`);
+                    logger.debug(`[EPHEMERAL] Usage: session ${data.sid} cost=$${data.cost.total.toFixed(4)} tokens=${data.tokens.total}`);
                     break;
                 case 'machine-activity':
                     // Machine/daemon activity update - track other daemons coming online/offline
-                    logger.debug(`[EPHEMERAL] Machine activity: ${data.id} active=${data.active}`);
+                    logger.debug(`[EPHEMERAL] Machine activity: ${data.machineId} active=${data.active}`);
                     break;
                 default:
                     // Unknown ephemeral type - log but don't crash (forward compatibility)

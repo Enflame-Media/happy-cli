@@ -379,12 +379,12 @@ export class ApiMachineClient {
                     break;
                 case 'usage':
                     // Real-time usage/cost update - informational for daemon
-                    logger.debug(`[API MACHINE] [EPHEMERAL] Usage: session ${data.id} cost=$${data.cost.total.toFixed(4)}`);
+                    logger.debug(`[API MACHINE] [EPHEMERAL] Usage: session ${data.sid} cost=$${data.cost.total.toFixed(4)}`);
                     break;
                 case 'machine-activity':
                     // Other machine/daemon activity - track peers for awareness
-                    if (data.id !== this.machine.id) {
-                        logger.debug(`[API MACHINE] [EPHEMERAL] Peer daemon ${data.id} active=${data.active}`);
+                    if (data.machineId !== this.machine.id) {
+                        logger.debug(`[API MACHINE] [EPHEMERAL] Peer daemon ${data.machineId} active=${data.active}`);
                     }
                     break;
                 default:

@@ -204,7 +204,7 @@ describe('Ephemeral update types - HAP-352', () => {
         it('should have correct structure', () => {
             const update: EphemeralActivityUpdate = {
                 type: 'activity',
-                id: 'session-123',
+                sid: 'session-123', // HAP-654: Standardized to `sid`
                 active: true,
                 activeAt: Date.now(),
                 thinking: false
@@ -218,7 +218,7 @@ describe('Ephemeral update types - HAP-352', () => {
         it('should have correct structure', () => {
             const update: EphemeralUsageUpdate = {
                 type: 'usage',
-                id: 'session-123',
+                sid: 'session-123', // HAP-654: Standardized to `sid`
                 key: 'claude-session',
                 timestamp: Date.now(),
                 tokens: {
@@ -244,7 +244,7 @@ describe('Ephemeral update types - HAP-352', () => {
         it('should have correct structure', () => {
             const update: EphemeralMachineActivityUpdate = {
                 type: 'machine-activity',
-                id: 'machine-123',
+                machineId: 'machine-123', // HAP-655: Standardized to `machineId`
                 active: true,
                 activeAt: Date.now()
             }
@@ -256,9 +256,9 @@ describe('Ephemeral update types - HAP-352', () => {
     describe('EphemeralUpdate union', () => {
         it('should accept all ephemeral update types', () => {
             const updates: EphemeralUpdate[] = [
-                { type: 'activity', id: '1', active: true, activeAt: 0, thinking: false },
-                { type: 'usage', id: '2', key: 'k', timestamp: 0, tokens: { total: 0, input: 0, output: 0, cache_creation: 0, cache_read: 0 }, cost: { total: 0, input: 0, output: 0 } },
-                { type: 'machine-activity', id: '3', active: false, activeAt: 0 }
+                { type: 'activity', sid: '1', active: true, activeAt: 0, thinking: false },
+                { type: 'usage', sid: '2', key: 'k', timestamp: 0, tokens: { total: 0, input: 0, output: 0, cache_creation: 0, cache_read: 0 }, cost: { total: 0, input: 0, output: 0 } },
+                { type: 'machine-activity', machineId: '3', active: false, activeAt: 0 }
             ]
             expect(updates).toHaveLength(3)
             expect(updates[0].type).toBe('activity')
