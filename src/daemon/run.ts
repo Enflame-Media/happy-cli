@@ -31,7 +31,8 @@ import { validateHeartbeatInterval } from '@/utils/validators';
 import { createDefaultMemoryMonitor, MemoryMonitorHandle } from './memoryMonitor';
 import { clearGlobalDeduplicator } from '@/utils/requestDeduplication';
 import { addBreadcrumb, setTag, trackMetric, shutdownTelemetry } from '@/telemetry';
-import { isValidSessionId, normalizeSessionId } from '@/claude/utils/sessionValidation';
+import { isValidSessionId, normalizeSessionId, isHexSessionId, hexToUuid } from '@/claude/utils/sessionValidation';
+import type { GetSessionStatusResponse } from './types';
 
 // Version cache for package.json (HAP-354)
 // Eliminates repetitive disk I/O during heartbeat checks
@@ -573,6 +574,50 @@ export async function startDaemon(): Promise<void> {
       }
     };
 
+    // Get session status by sessionId
+    // HAP-642: Machine-level handler to check session status before calling session-specific RPC methods
+    const getSessionStatus = (sessionId: string): GetSessionStatusResponse => {
+      logger.debug(`[DAEMON RUN] Checking status of session ${sessionId}`);
+
+      // Normalize input for comparison (accepts both hex and UUID formats)
+      let normalizedId: string;
+      try {
+        normalizedId = isHexSessionId(sessionId) ? hexToUuid(sessionId) : sessionId.toLowerCase();
+      } catch {
+        // If normalization fails, treat as unknown
+        return {
+          status: 'unknown',
+          sessionId,
+          message: 'Invalid session ID format'
+        };
+      }
+
+      // Check if session is currently tracked (active)
+      for (const session of pidToTrackedSession.values()) {
+        // Compare with normalized session ID (happySessionId is already in UUID format)
+        if (session.happySessionId?.toLowerCase() === normalizedId) {
+          return {
+            status: 'active',
+            sessionId: session.happySessionId,
+            message: 'Session is currently active',
+            metadata: {
+              startedBy: session.startedBy,
+              pid: session.pid
+            }
+          };
+        }
+      }
+
+      // Session not found in active sessions
+      // We can't distinguish between "stopped" and "never existed" without historical tracking
+      // Return "unknown" to indicate the session is not currently active
+      return {
+        status: 'unknown',
+        sessionId: normalizedId,
+        message: 'Session is not active on this machine. It may have stopped, been archived, or never existed.'
+      };
+    };
+
     // Stop a session by sessionId or PID fallback
     const stopSession = (sessionId: string): boolean => {
       logger.debug(`[DAEMON RUN] Attempting to stop session ${sessionId}`);
@@ -710,7 +755,8 @@ export async function startDaemon(): Promise<void> {
     apiMachine.setRPCHandlers({
       spawnSession,
       stopSession,
-      requestShutdown: () => requestShutdown('happy-app')
+      requestShutdown: () => requestShutdown('happy-app'),
+      getSessionStatus
     });
 
     // Connect to server

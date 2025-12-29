@@ -7,6 +7,29 @@ import { ChildProcess } from 'child_process';
 import type { DirResult } from 'tmp';
 
 /**
+ * Possible session status values returned by get-session-status RPC
+ * @see HAP-642
+ */
+export type SessionStatus = 'active' | 'stopped' | 'unknown';
+
+/**
+ * Response from get-session-status RPC handler
+ * @see HAP-642
+ */
+export interface GetSessionStatusResponse {
+    status: SessionStatus;
+    /** Session ID in UUID format (normalized) */
+    sessionId: string;
+    /** Human-readable message explaining the status */
+    message?: string;
+    /** Session metadata if available and active */
+    metadata?: {
+        startedBy: string;
+        pid?: number;
+    };
+}
+
+/**
  * Session tracking for daemon
  */
 export interface TrackedSession {

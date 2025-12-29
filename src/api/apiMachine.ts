@@ -21,10 +21,21 @@ import { buildMcpSyncState } from '@/mcp/config';
 const KEEP_ALIVE_BASE_INTERVAL_MS = 20000; // 20 seconds base interval
 const KEEP_ALIVE_JITTER_MAX_MS = 5000; // 0-5 seconds random jitter
 
+import type { GetSessionStatusResponse } from '@/daemon/types';
+import { isValidSessionId, normalizeSessionId } from '@/claude/utils/sessionValidation';
+
+/**
+ * RPC handlers provided by the daemon to the machine client
+ */
 type MachineRpcHandlers = {
     spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
     stopSession: (sessionId: string) => boolean;
     requestShutdown: () => void;
+    /**
+     * Get the status of a session by ID
+     * @see HAP-642 - Added to allow mobile app to check session status before calling session-specific RPC methods
+     */
+    getSessionStatus: (sessionId: string) => GetSessionStatusResponse;
 }
 
 export class ApiMachineClient {
@@ -63,7 +74,8 @@ export class ApiMachineClient {
     setRPCHandlers({
         spawnSession,
         stopSession,
-        requestShutdown
+        requestShutdown,
+        getSessionStatus
     }: MachineRpcHandlers) {
         // Register spawn session handler
         type SpawnSessionParams = {
@@ -127,6 +139,30 @@ export class ApiMachineClient {
             }, 100);
 
             return { message: 'Daemon stop request acknowledged, starting shutdown sequence...' };
+        });
+
+        // Register get-session-status handler
+        // HAP-642: Machine-level handler to check session status before calling session-specific RPC methods
+        // This allows the mobile app to determine if a session is active, stopped, or unknown
+        type GetSessionStatusParams = { sessionId?: string };
+        this.rpcHandlerManager.registerHandler<GetSessionStatusParams, GetSessionStatusResponse>('get-session-status', (params, _signal) => {
+            const { sessionId } = params ?? {};
+
+            if (!sessionId) {
+                throw new AppError(ErrorCodes.INVALID_INPUT, 'Session ID is required');
+            }
+
+            // Validate session ID format (accepts both UUID and hex)
+            if (!isValidSessionId(sessionId)) {
+                throw new AppError(ErrorCodes.INVALID_INPUT, `Invalid session ID format: expected UUID or hex (32 chars), got "${sessionId.substring(0, 50)}"`);
+            }
+
+            // Normalize to UUID format for consistent comparison
+            const normalizedId = normalizeSessionId(sessionId);
+            const result = getSessionStatus(normalizedId);
+
+            logger.debug(`[API MACHINE] get-session-status: ${sessionId} -> ${result.status}`);
+            return result;
         });
     }
 

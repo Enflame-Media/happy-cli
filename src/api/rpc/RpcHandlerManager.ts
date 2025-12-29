@@ -19,6 +19,23 @@ import { AppError, ErrorCodes } from '@/utils/errors';
 import type { HappyWebSocket } from '@/api/HappyWebSocket';
 
 /**
+ * Possible RPC error codes returned in error responses
+ * These help clients distinguish between different failure modes
+ */
+export const RPC_ERROR_CODES = {
+    /** Method handler not found - may be stopped session or truly missing method */
+    METHOD_NOT_FOUND: 'METHOD_NOT_FOUND',
+    /** Session is not active (stopped, archived, or unknown) */
+    SESSION_NOT_ACTIVE: 'SESSION_NOT_ACTIVE',
+    /** Request was cancelled */
+    OPERATION_CANCELLED: 'OPERATION_CANCELLED',
+    /** Failed to decrypt request parameters */
+    DECRYPTION_FAILED: 'DECRYPTION_FAILED',
+    /** Internal handler error */
+    INTERNAL_ERROR: 'INTERNAL_ERROR',
+} as const;
+
+/**
  * Interface for WebSocket-like objects that support RPC
  * Allows the manager to work with both Socket.io and native WebSocket
  */
@@ -73,6 +90,8 @@ export class RpcHandlerManager {
      * Handle an incoming RPC request
      * @param request - The RPC request data
      * @returns Encrypted response string
+     *
+     * @see HAP-642 - Improved error handling for stopped sessions
      */
     async handleRequest(
         request: RpcRequest,
@@ -90,10 +109,40 @@ export class RpcHandlerManager {
             const handler = this.handlers.get(request.method);
 
             if (!handler) {
+                // HAP-642: Improved error handling for stopped sessions
+                // Extract session ID from method name ({scopePrefix}:{methodName})
+                // to provide context-aware error messages
+                const methodParts = request.method.split(':');
+                const isSessionScoped = methodParts.length === 2 && methodParts[0].length >= 32;
+
+                if (isSessionScoped) {
+                    // This is likely a session-scoped method where the session has stopped
+                    // Log at DEBUG level since this is expected behavior when sessions end
+                    this.logger('[RPC] [DEBUG] Method not found for session (session may have stopped)', {
+                        method: request.method,
+                        sessionPrefix: methodParts[0].substring(0, 8) + '...'
+                    });
+
+                    // Return structured error response with clear context
+                    const errorResponse = {
+                        error: 'Session not active',
+                        code: RPC_ERROR_CODES.SESSION_NOT_ACTIVE,
+                        message: 'The session this method belongs to is no longer active. It may have been stopped, archived, or disconnected.',
+                        method: methodParts[1],
+                        cancelled: false
+                    };
+                    return encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, errorResponse));
+                }
+
+                // Non-session-scoped method - this is unexpected
+                // Log at ERROR level as this indicates a real issue
                 this.logger('[RPC] [ERROR] Method not found', { method: request.method });
-                const errorResponse = { error: 'Method not found', cancelled: false };
-                const encryptedError = encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, errorResponse));
-                return encryptedError;
+                const errorResponse = {
+                    error: 'Method not found',
+                    code: RPC_ERROR_CODES.METHOD_NOT_FOUND,
+                    cancelled: false
+                };
+                return encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, errorResponse));
             }
 
             // Check if already cancelled before starting
