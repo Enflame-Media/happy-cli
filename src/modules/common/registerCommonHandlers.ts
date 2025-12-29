@@ -9,7 +9,7 @@ import { run as runDifftastic } from '@/modules/difftastic/index';
 import { startHTTPDirectProxy, HTTPProxy } from '@/modules/proxy/index';
 import { RpcHandlerManager } from '../../api/rpc/RpcHandlerManager';
 import { withRetry } from '@/utils/retry';
-import { validatePath, validateCommand } from './pathSecurity';
+import { validatePath, validateCommand, ALLOWED_COMMANDS } from './pathSecurity';
 
 const execAsync = promisify(exec);
 
@@ -136,6 +136,18 @@ interface StopProxyResponse {
 interface ListProxiesResponse {
     success: boolean;
     proxies?: Array<{ id: string; url: string; target: string }>;
+    error?: string;
+}
+
+// Allowed commands types
+interface GetAllowedCommandsResponse {
+    success: boolean;
+    /**
+     * Map of command name to allowed subcommands.
+     * Empty array means all subcommands are allowed.
+     * Non-empty array means only those specific subcommands are allowed.
+     */
+    commands?: Record<string, readonly string[]>;
     error?: string;
 }
 
@@ -654,6 +666,17 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager, wor
         return {
             success: true,
             proxies
+        };
+    });
+
+    // Get allowed commands handler - returns the command allowlist for UI display
+    // HAP-635: Enables mobile app to show users which bash commands are permitted
+    rpcHandlerManager.registerHandler<Record<string, never>, GetAllowedCommandsResponse>('getAllowedCommands', async (_data, _signal) => {
+        logger.debug('Get allowed commands request');
+
+        return {
+            success: true,
+            commands: ALLOWED_COMMANDS
         };
     });
 }
