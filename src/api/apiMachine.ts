@@ -87,7 +87,7 @@ export class ApiMachineClient {
             agent?: 'claude' | 'codex';
             token?: string;
         };
-        this.rpcHandlerManager.registerHandler<SpawnSessionParams, { type: string; sessionId?: string; message?: string; directory?: string }>('spawn-happy-session', async (params, _signal) => {
+        this.rpcHandlerManager.registerHandler<SpawnSessionParams, { type: string; sessionId?: string; resumedFrom?: string; message?: string; directory?: string }>('spawn-happy-session', async (params, _signal) => {
             const { directory, sessionId, machineId, approvedNewDirectoryCreation, agent, token } = params ?? {};
             logger.debug(`[API MACHINE] Spawning session with params: ${JSON.stringify(params)}`);
 
@@ -99,8 +99,9 @@ export class ApiMachineClient {
 
             switch (result.type) {
                 case 'success':
-                    logger.debug(`[API MACHINE] Spawned session ${result.sessionId}${result.message ? ` (${result.message})` : ''}`);
-                    return { type: 'success', sessionId: result.sessionId, message: result.message };
+                    logger.debug(`[API MACHINE] Spawned session ${result.sessionId}${result.resumedFrom ? ` (resumed from ${result.resumedFrom})` : ''}${result.message ? ` (${result.message})` : ''}`);
+                    // HAP-691: Include resumedFrom to allow app to link old and new sessions
+                    return { type: 'success', sessionId: result.sessionId, resumedFrom: result.resumedFrom, message: result.message };
 
                 case 'requestToApproveDirectoryCreation':
                     logger.debug(`[API MACHINE] Requesting directory creation approval for: ${result.directory}`);
