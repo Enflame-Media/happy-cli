@@ -31,7 +31,7 @@ import { validateHeartbeatInterval } from '@/utils/validators';
 import { createDefaultMemoryMonitor, MemoryMonitorHandle } from './memoryMonitor';
 import { clearGlobalDeduplicator } from '@/utils/requestDeduplication';
 import { addBreadcrumb, setTag, trackMetric, shutdownTelemetry } from '@/telemetry';
-import { isValidSessionId, normalizeSessionId, isHexSessionId, hexToUuid } from '@/claude/utils/sessionValidation';
+import { isValidSessionId, normalizeSessionId, InvalidSessionIdError } from '@/claude/utils/sessionValidation';
 import type { GetSessionStatusResponse } from './types';
 
 // Version cache for package.json (HAP-354)
@@ -588,16 +588,20 @@ export async function startDaemon(): Promise<void> {
       logger.debug(`[DAEMON RUN] Checking status of session ${sessionId}`);
 
       // Normalize input for comparison (accepts both hex and UUID formats)
+      // Use normalizeSessionId which validates format and converts hex to UUID
       let normalizedId: string;
       try {
-        normalizedId = isHexSessionId(sessionId) ? hexToUuid(sessionId) : sessionId.toLowerCase();
-      } catch {
-        // If normalization fails, treat as unknown
-        return {
-          status: 'unknown',
-          sessionId,
-          message: 'Invalid session ID format'
-        };
+        normalizedId = normalizeSessionId(sessionId);
+      } catch (error) {
+        // If normalization fails (invalid format), treat as unknown
+        if (error instanceof InvalidSessionIdError) {
+          return {
+            status: 'unknown',
+            sessionId,
+            message: 'Invalid session ID format'
+          };
+        }
+        throw error; // Re-throw unexpected errors
       }
 
       // Check if session is currently tracked (active)

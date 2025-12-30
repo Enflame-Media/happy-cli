@@ -156,7 +156,11 @@ export class RpcHandlerManager {
             // Fail closed: reject requests with invalid encryption
             if (decryptedParams === null) {
                 this.logger('[RPC] [ERROR] Failed to decrypt RPC params - rejecting request');
-                const errorResponse = { error: 'DECRYPTION_FAILED', message: 'Failed to decrypt request parameters' };
+                const errorResponse = {
+                    error: RPC_ERROR_CODES.DECRYPTION_FAILED,
+                    code: RPC_ERROR_CODES.DECRYPTION_FAILED,
+                    message: 'Failed to decrypt request parameters'
+                };
                 return encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, errorResponse));
             }
 
@@ -178,9 +182,14 @@ export class RpcHandlerManager {
             const isCancelled = abortController?.signal.aborted ?? false;
             const errorMessage = isCancelled ? 'Request cancelled' : (error instanceof Error ? error.message : 'Unknown error');
 
-            this.logger('[RPC] [ERROR] Error handling request', { error: errorMessage, cancelled: isCancelled });
+            this.logger('[RPC] [ERROR] Error handling request', {
+                error: errorMessage,
+                cancelled: isCancelled,
+                stack: error instanceof Error ? error.stack : undefined
+            });
             const errorResponse = {
                 error: errorMessage,
+                code: isCancelled ? RPC_ERROR_CODES.OPERATION_CANCELLED : RPC_ERROR_CODES.INTERNAL_ERROR,
                 cancelled: isCancelled
             };
             return encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, errorResponse));

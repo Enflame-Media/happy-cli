@@ -7,8 +7,19 @@ import { ChildProcess } from 'child_process';
 import type { DirResult } from 'tmp';
 
 /**
- * Possible session status values returned by get-session-status RPC
- * @see HAP-642
+ * Possible session status values returned by get-session-status RPC.
+ *
+ * Current implementation only returns 'active' or 'unknown' because
+ * distinguishing 'stopped' from 'never existed' requires historical
+ * tracking which is not yet implemented.
+ *
+ * @see HAP-642 - Original implementation
+ * @see run.ts:620 - Comment explaining why 'stopped' isn't currently returned
+ *
+ * TODO: Return 'stopped' when historical session tracking is implemented.
+ *       This will require persisting session state to disk/database so we
+ *       can distinguish between "session existed and stopped" vs "session
+ *       never existed on this machine".
  */
 export type SessionStatus = 'active' | 'stopped' | 'unknown';
 
