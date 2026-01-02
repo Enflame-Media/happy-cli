@@ -136,7 +136,14 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         throw error;
     }
 
+    // Create realtime session client (single instance to avoid resource leaks)
+    // HAP-744: Create session BEFORE notifying daemon to ensure RPC handlers are registered
+    // before daemon considers the session "ready" for command replay
+    const session = api.sessionSyncClient(response);
+
     // Always report to daemon if it exists
+    // Note: This must come AFTER sessionSyncClient() to avoid race condition where
+    // daemon tries to replay commands before handlers are registered (HAP-744)
     try {
         logger.debug(`[START] Reporting session ${response.id} to daemon`);
         const result = await notifyDaemonSessionStarted(response.id, metadata);
@@ -148,9 +155,6 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     } catch (error) {
         logger.debug('[START] Failed to report to daemon (may not be running):', error);
     }
-
-    // Create realtime session client (single instance to avoid resource leaks)
-    const session = api.sessionSyncClient(response);
 
     // Extract SDK metadata in background and update session when ready
     extractSDKMetadataAsync(async (sdkMetadata) => {

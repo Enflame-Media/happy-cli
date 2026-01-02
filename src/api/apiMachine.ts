@@ -74,6 +74,28 @@ export class ApiMachineClient {
     };
 
     /**
+     * Per-session revival attempt tracking to prevent infinite loops.
+     * Maps session ID -> number of revival attempts for that session.
+     * Cleared when revival succeeds or when session is no longer referenced.
+     *
+     * @see HAP-744 - Fix session revival race condition causing infinite loop
+     */
+    private sessionRevivalAttempts: Map<string, number> = new Map();
+    private readonly MAX_REVIVAL_ATTEMPTS_PER_SESSION = 3;
+
+    /**
+     * Global revival cooldown tracking to prevent cascade failures.
+     * Tracks timestamps of recent revival failures in a sliding window.
+     *
+     * @see HAP-744 - Fix session revival race condition causing infinite loop
+     */
+    private revivalFailureTimestamps: number[] = [];
+    private revivalCooldownUntil: number = 0;
+    private readonly COOLDOWN_WINDOW_MS = 30000; // 30 seconds
+    private readonly COOLDOWN_FAILURE_THRESHOLD = 10; // 10 failures in window
+    private readonly COOLDOWN_DURATION_MS = 60000; // 60 second cooldown
+
+    /**
      * Socket event handlers - stored as class properties to prevent GC (HAP-363)
      * WeakRef-based HappyWebSocket requires handlers to be retained by the caller.
      */
@@ -199,22 +221,89 @@ export class ApiMachineClient {
     }
 
     /**
+     * Check if global revival cooldown is active.
+     * Cooldown is triggered when too many failures occur in a short window.
+     *
+     * @see HAP-744 - Fix session revival race condition causing infinite loop
+     */
+    private isRevivalCooldownActive(): boolean {
+        const now = Date.now();
+
+        // Check if we're in an active cooldown period
+        if (this.revivalCooldownUntil > now) {
+            return true;
+        }
+
+        // Clean up old timestamps outside the sliding window
+        this.revivalFailureTimestamps = this.revivalFailureTimestamps.filter(
+            ts => now - ts < this.COOLDOWN_WINDOW_MS
+        );
+
+        return false;
+    }
+
+    /**
+     * Record a revival failure and potentially trigger cooldown.
+     *
+     * @see HAP-744 - Fix session revival race condition causing infinite loop
+     */
+    private recordRevivalFailure(): void {
+        const now = Date.now();
+        this.revivalFailureTimestamps.push(now);
+
+        // Clean up old timestamps
+        this.revivalFailureTimestamps = this.revivalFailureTimestamps.filter(
+            ts => now - ts < this.COOLDOWN_WINDOW_MS
+        );
+
+        // Check if we've exceeded the threshold
+        if (this.revivalFailureTimestamps.length >= this.COOLDOWN_FAILURE_THRESHOLD) {
+            this.revivalCooldownUntil = now + this.COOLDOWN_DURATION_MS;
+            logger.debug(`[API MACHINE] [REVIVAL] Circuit breaker triggered: ${this.revivalFailureTimestamps.length} failures in ${this.COOLDOWN_WINDOW_MS}ms window, pausing revivals for ${this.COOLDOWN_DURATION_MS}ms`);
+        }
+    }
+
+    /**
      * Attempt to revive a stopped session by spawning a new session with --resume.
      * This method is called when an RPC request fails with SESSION_NOT_ACTIVE.
      *
      * Revival Flow:
-     * 1. Check if session is archived (don't revive archived sessions)
-     * 2. Spawn new session with --resume flag pointing to stopped session
-     * 3. Wait for new session to be ready
-     * 4. Return result with new session ID
+     * 1. Check circuit breaker limits (HAP-744)
+     * 2. Check if session is archived (don't revive archived sessions)
+     * 3. Spawn new session with --resume flag pointing to stopped session
+     * 4. Wait for new session to be ready
+     * 5. Return result with new session ID
      *
      * @param sessionId - The stopped session ID to revive
      * @param directory - Working directory for the session
      * @returns Result of the revival attempt
      *
      * @see HAP-733 - Automatic session revival on "Method not found" RPC errors
+     * @see HAP-744 - Fix session revival race condition causing infinite loop
      */
     private async tryReviveSession(sessionId: string, directory: string): Promise<SessionRevivalResult> {
+        // HAP-744: Check global cooldown first
+        if (this.isRevivalCooldownActive()) {
+            const remainingMs = this.revivalCooldownUntil - Date.now();
+            logger.debug(`[API MACHINE] [REVIVAL] Global cooldown active, ${remainingMs}ms remaining. Rejecting revival for ${sessionId.substring(0, 8)}...`);
+            return {
+                revived: false,
+                originalSessionId: sessionId,
+                error: `Revival paused: circuit breaker active (${Math.ceil(remainingMs / 1000)}s remaining)`
+            };
+        }
+
+        // HAP-744: Check per-session attempt limit
+        const attempts = this.sessionRevivalAttempts.get(sessionId) || 0;
+        if (attempts >= this.MAX_REVIVAL_ATTEMPTS_PER_SESSION) {
+            logger.debug(`[API MACHINE] [REVIVAL] Max attempts (${this.MAX_REVIVAL_ATTEMPTS_PER_SESSION}) exceeded for session ${sessionId.substring(0, 8)}...`);
+            return {
+                revived: false,
+                originalSessionId: sessionId,
+                error: `Max revival attempts (${this.MAX_REVIVAL_ATTEMPTS_PER_SESSION}) exceeded for this session`
+            };
+        }
+
         // Check if revival is already in progress for this session
         const existingRevival = this.revivingSessionIds.get(sessionId);
         if (existingRevival) {
@@ -231,8 +320,11 @@ export class ApiMachineClient {
             };
         }
 
+        // HAP-744: Increment per-session attempt counter
+        this.sessionRevivalAttempts.set(sessionId, attempts + 1);
+
         this.revivalMetrics.attempted++;
-        logger.debug(`[API MACHINE] [REVIVAL] Attempting revival for session ${sessionId.substring(0, 8)}... (attempt #${this.revivalMetrics.attempted})`);
+        logger.debug(`[API MACHINE] [REVIVAL] Attempting revival for session ${sessionId.substring(0, 8)}... (attempt #${attempts + 1}/${this.MAX_REVIVAL_ATTEMPTS_PER_SESSION}, global #${this.revivalMetrics.attempted})`);
 
         // Create the revival promise
         const revivalPromise = this.executeSessionRevival(sessionId, directory);
@@ -246,9 +338,13 @@ export class ApiMachineClient {
             // Update metrics
             if (result.revived) {
                 this.revivalMetrics.succeeded++;
+                // HAP-744: Clear attempt counter on success
+                this.sessionRevivalAttempts.delete(sessionId);
                 logger.debug(`[API MACHINE] [REVIVAL] Session ${sessionId.substring(0, 8)}... revived successfully -> ${result.newSessionId?.substring(0, 8)}...`);
             } else {
                 this.revivalMetrics.failed++;
+                // HAP-744: Record failure for circuit breaker
+                this.recordRevivalFailure();
                 logger.debug(`[API MACHINE] [REVIVAL] Session ${sessionId.substring(0, 8)}... revival failed: ${result.error}`);
             }
 
@@ -420,9 +516,35 @@ export class ApiMachineClient {
             const newMethod = `${revivalResult.newSessionId}:${methodName}`;
             logger.debug(`[API MACHINE] [REVIVAL] Replaying command: ${methodName} on revived session ${revivalResult.newSessionId?.substring(0, 8)}...`);
 
-            // Wait a short time for the new session's handlers to be registered
-            // The spawn-happy-session RPC waits for the session webhook, but handlers may take slightly longer
-            await new Promise(resolve => setTimeout(resolve, 500));
+            // HAP-744: Wait for the new session's handlers to be registered using polling
+            // instead of a fixed delay. The spawn-happy-session RPC waits for the session
+            // webhook, but handlers may take longer to register.
+            const POLL_INTERVAL_MS = 100;
+            const MAX_WAIT_MS = 5000;
+            let waited = 0;
+            let handlerReady = false;
+
+            while (waited < MAX_WAIT_MS) {
+                // Check if the new session's handlers are registered
+                // by attempting to get its status from the handler manager
+                try {
+                    const status = this.rpcHandlers?.getSessionStatus(revivalResult.newSessionId!);
+                    if (status?.status === 'active') {
+                        handlerReady = true;
+                        logger.debug(`[API MACHINE] [REVIVAL] Handler ready after ${waited}ms`);
+                        break;
+                    }
+                } catch {
+                    // Handler not ready yet, continue polling
+                }
+
+                await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+                waited += POLL_INTERVAL_MS;
+            }
+
+            if (!handlerReady) {
+                logger.debug(`[API MACHINE] [REVIVAL] Handler not ready after ${MAX_WAIT_MS}ms, proceeding anyway`);
+            }
 
             // Replay the original request with the new session ID
             const replayResponse = await this.rpcHandlerManager.handleRequest({
