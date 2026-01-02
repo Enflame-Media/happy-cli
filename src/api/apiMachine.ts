@@ -13,7 +13,7 @@ import { EphemeralUpdate, MachineMetadata, DaemonState, Machine, Update, UpdateM
 import { registerCommonHandlers, SpawnSessionOptions, SpawnSessionResult } from '../modules/common/registerCommonHandlers';
 import { encodeBase64, decodeBase64, encrypt, decrypt } from './encryption';
 import { backoff } from '@/utils/time';
-import { RpcHandlerManager } from './rpc/RpcHandlerManager';
+import { RpcHandlerManager, RPC_ERROR_CODES, type SessionRevivalResult } from './rpc/RpcHandlerManager';
 import { HappyWebSocket, WebSocketMetrics } from './HappyWebSocket';
 import type { MetadataUpdateResponse, DaemonStateUpdateResponse } from './socketUtils';
 import { buildMcpSyncState } from '@/mcp/config';
@@ -21,6 +21,9 @@ import { buildMcpSyncState } from '@/mcp/config';
 // Keep-alive timing configuration (prevents thundering herd on reconnection)
 const KEEP_ALIVE_BASE_INTERVAL_MS = 20000; // 20 seconds base interval
 const KEEP_ALIVE_JITTER_MAX_MS = 5000; // 0-5 seconds random jitter
+
+// Session revival configuration (HAP-733)
+const SESSION_REVIVAL_TIMEOUT_MS = parseInt(process.env.HAPPY_SESSION_REVIVAL_TIMEOUT || '60000', 10);
 
 import type { GetSessionStatusResponse } from '@/daemon/types';
 import { isValidSessionId, normalizeSessionId } from '@/claude/utils/sessionValidation';
@@ -45,6 +48,30 @@ export class ApiMachineClient {
 
     private isShuttingDown = false;
     private rpcHandlerManager: RpcHandlerManager;
+
+    /**
+     * Track sessions currently being revived to prevent concurrent revival attempts.
+     * Maps session ID -> Promise that resolves when revival completes.
+     *
+     * @see HAP-733 - Automatic session revival
+     */
+    private revivingSessionIds: Map<string, Promise<SessionRevivalResult>> = new Map();
+
+    /**
+     * RPC handlers provided by daemon - stored for revival access
+     * @see HAP-733
+     */
+    private rpcHandlers: MachineRpcHandlers | null = null;
+
+    /**
+     * Telemetry counters for session revival
+     * @see HAP-733
+     */
+    private revivalMetrics = {
+        attempted: 0,
+        succeeded: 0,
+        failed: 0,
+    };
 
     /**
      * Socket event handlers - stored as class properties to prevent GC (HAP-363)
@@ -78,6 +105,9 @@ export class ApiMachineClient {
         requestShutdown,
         getSessionStatus
     }: MachineRpcHandlers) {
+        // Store handlers for revival access (HAP-733)
+        this.rpcHandlers = { spawnSession, stopSession, requestShutdown, getSessionStatus };
+
         // Register spawn session handler
         type SpawnSessionParams = {
             directory?: string;
@@ -166,6 +196,273 @@ export class ApiMachineClient {
             logger.debug(`[API MACHINE] get-session-status: ${sessionId} -> ${result.status}`);
             return result;
         });
+    }
+
+    /**
+     * Attempt to revive a stopped session by spawning a new session with --resume.
+     * This method is called when an RPC request fails with SESSION_NOT_ACTIVE.
+     *
+     * Revival Flow:
+     * 1. Check if session is archived (don't revive archived sessions)
+     * 2. Spawn new session with --resume flag pointing to stopped session
+     * 3. Wait for new session to be ready
+     * 4. Return result with new session ID
+     *
+     * @param sessionId - The stopped session ID to revive
+     * @param directory - Working directory for the session
+     * @returns Result of the revival attempt
+     *
+     * @see HAP-733 - Automatic session revival on "Method not found" RPC errors
+     */
+    private async tryReviveSession(sessionId: string, directory: string): Promise<SessionRevivalResult> {
+        // Check if revival is already in progress for this session
+        const existingRevival = this.revivingSessionIds.get(sessionId);
+        if (existingRevival) {
+            logger.debug(`[API MACHINE] [REVIVAL] Session ${sessionId.substring(0, 8)}... revival already in progress, waiting`);
+            return existingRevival;
+        }
+
+        // Ensure handlers are available
+        if (!this.rpcHandlers) {
+            return {
+                revived: false,
+                originalSessionId: sessionId,
+                error: 'RPC handlers not initialized'
+            };
+        }
+
+        this.revivalMetrics.attempted++;
+        logger.debug(`[API MACHINE] [REVIVAL] Attempting revival for session ${sessionId.substring(0, 8)}... (attempt #${this.revivalMetrics.attempted})`);
+
+        // Create the revival promise
+        const revivalPromise = this.executeSessionRevival(sessionId, directory);
+
+        // Track it to prevent concurrent attempts
+        this.revivingSessionIds.set(sessionId, revivalPromise);
+
+        try {
+            const result = await revivalPromise;
+
+            // Update metrics
+            if (result.revived) {
+                this.revivalMetrics.succeeded++;
+                logger.debug(`[API MACHINE] [REVIVAL] Session ${sessionId.substring(0, 8)}... revived successfully -> ${result.newSessionId?.substring(0, 8)}...`);
+            } else {
+                this.revivalMetrics.failed++;
+                logger.debug(`[API MACHINE] [REVIVAL] Session ${sessionId.substring(0, 8)}... revival failed: ${result.error}`);
+            }
+
+            return result;
+        } finally {
+            // Always clean up tracking
+            this.revivingSessionIds.delete(sessionId);
+        }
+    }
+
+    /**
+     * Execute the actual session revival logic.
+     * Separated from tryReviveSession for cleaner code organization.
+     *
+     * @see HAP-733
+     */
+    private async executeSessionRevival(sessionId: string, directory: string): Promise<SessionRevivalResult> {
+        // Step 1: Check if session is archived (don't revive archived sessions)
+        try {
+            const statusResult = this.rpcHandlers!.getSessionStatus(sessionId);
+
+            // Only revive sessions that are truly stopped, not archived
+            // Note: Currently getSessionStatus only returns 'active' or 'unknown'
+            // 'unknown' means the session is not currently running, which is what we want to revive
+            if (statusResult.status === 'active') {
+                // Session is actually active - shouldn't be trying to revive
+                return {
+                    revived: false,
+                    originalSessionId: sessionId,
+                    error: 'Session is already active'
+                };
+            }
+
+            // If we had 'archived' status tracking, we would check here:
+            // if (statusResult.status === 'archived') {
+            //     return { revived: false, originalSessionId: sessionId, error: 'Cannot revive archived session' };
+            // }
+        } catch (error) {
+            logger.debug(`[API MACHINE] [REVIVAL] Failed to check session status: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            // Continue with revival attempt even if status check fails
+        }
+
+        // Step 2: Spawn new session with --resume flag
+        try {
+            // Create a timeout promise
+            const timeoutPromise = new Promise<never>((_, reject) => {
+                setTimeout(() => {
+                    reject(new Error(`Revival timeout after ${SESSION_REVIVAL_TIMEOUT_MS}ms`));
+                }, SESSION_REVIVAL_TIMEOUT_MS);
+            });
+
+            // Race between spawn and timeout
+            const spawnPromise = this.rpcHandlers!.spawnSession({
+                directory,
+                sessionId, // Pass the old session ID for --resume
+            });
+
+            const spawnResult = await Promise.race([spawnPromise, timeoutPromise]);
+
+            if (spawnResult.type === 'success') {
+                // Step 3: Broadcast session:updated event to connected clients
+                // Note: The mobile app will receive this via the WebSocket connection
+                // and should update its session reference accordingly
+                if (this.socket?.connected && spawnResult.sessionId !== sessionId) {
+                    this.socket.emitClient('session-revived', {
+                        originalSessionId: sessionId,
+                        newSessionId: spawnResult.sessionId,
+                        machineId: this.machine.id
+                    });
+                    logger.debug(`[API MACHINE] [REVIVAL] Broadcast session-revived event`);
+                }
+
+                return {
+                    revived: true,
+                    newSessionId: spawnResult.sessionId,
+                    originalSessionId: sessionId,
+                    commandReplayed: false // Command replay happens in handleRpcWithRevival
+                };
+            } else if (spawnResult.type === 'requestToApproveDirectoryCreation') {
+                return {
+                    revived: false,
+                    originalSessionId: sessionId,
+                    error: `Directory creation required but not approved: ${spawnResult.directory}`
+                };
+            } else {
+                return {
+                    revived: false,
+                    originalSessionId: sessionId,
+                    error: spawnResult.errorMessage
+                };
+            }
+        } catch (error) {
+            return {
+                revived: false,
+                originalSessionId: sessionId,
+                error: error instanceof Error ? error.message : 'Unknown error during revival'
+            };
+        }
+    }
+
+    /**
+     * Handle an RPC request with automatic session revival on SESSION_NOT_ACTIVE errors.
+     *
+     * This wraps the standard RPC handling flow to:
+     * 1. Try the original RPC request
+     * 2. If it fails with SESSION_NOT_ACTIVE, attempt to revive the session
+     * 3. If revival succeeds, replay the original request
+     * 4. Return appropriate response (success, revival info, or error)
+     *
+     * @param request - The RPC request data
+     * @returns Encrypted response string
+     *
+     * @see HAP-733 - Automatic session revival on "Method not found" RPC errors
+     */
+    private async handleRpcWithRevival(request: { method: string; params: string }): Promise<string> {
+        // First, try the standard RPC handling
+        const initialResponse = await this.rpcHandlerManager.handleRequest(request);
+
+        // Check if the response indicates a stopped session
+        // We need to decrypt and inspect the response
+        try {
+            const decryptedResponse = decrypt<{
+                error?: string;
+                code?: string;
+            }>(this.machine.encryptionKey, this.machine.encryptionVariant, decodeBase64(initialResponse));
+
+            // If not an error or not SESSION_NOT_ACTIVE, return original response
+            if (!decryptedResponse || !decryptedResponse.code || decryptedResponse.code !== RPC_ERROR_CODES.SESSION_NOT_ACTIVE) {
+                return initialResponse;
+            }
+
+            // Extract session ID from the method name (format: {sessionId}:{methodName})
+            const methodParts = request.method.split(':');
+            if (methodParts.length !== 2) {
+                // Not a session-scoped method, return original error
+                return initialResponse;
+            }
+
+            const sessionId = methodParts[0];
+            const methodName = methodParts[1];
+
+            // Validate session ID format
+            if (!isValidSessionId(sessionId)) {
+                logger.debug(`[API MACHINE] [REVIVAL] Invalid session ID format in method: ${request.method}`);
+                return initialResponse;
+            }
+
+            logger.debug(`[API MACHINE] [REVIVAL] Detected SESSION_NOT_ACTIVE for ${sessionId.substring(0, 8)}...:${methodName}`);
+
+            // Attempt to revive the session
+            // TODO: Get directory from session metadata or a registry
+            // For now, use current working directory as fallback
+            const directory = process.cwd();
+            const revivalResult = await this.tryReviveSession(sessionId, directory);
+
+            if (!revivalResult.revived) {
+                // Revival failed - return error response with SESSION_REVIVAL_FAILED code
+                const errorResponse = {
+                    error: `Session revival failed: ${revivalResult.error}`,
+                    code: RPC_ERROR_CODES.SESSION_REVIVAL_FAILED,
+                    originalSessionId: sessionId,
+                    revivalResult
+                };
+                return encodeBase64(encrypt(this.machine.encryptionKey, this.machine.encryptionVariant, errorResponse));
+            }
+
+            // Revival succeeded - replay the original command with the NEW session ID
+            // Update the method name to use the new session ID
+            const newMethod = `${revivalResult.newSessionId}:${methodName}`;
+            logger.debug(`[API MACHINE] [REVIVAL] Replaying command: ${methodName} on revived session ${revivalResult.newSessionId?.substring(0, 8)}...`);
+
+            // Wait a short time for the new session's handlers to be registered
+            // The spawn-happy-session RPC waits for the session webhook, but handlers may take slightly longer
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            // Replay the original request with the new session ID
+            const replayResponse = await this.rpcHandlerManager.handleRequest({
+                ...request,
+                method: newMethod
+            });
+
+            // Check if replay succeeded
+            const decryptedReplayResponse = decrypt<{
+                error?: string;
+                code?: string;
+            }>(this.machine.encryptionKey, this.machine.encryptionVariant, decodeBase64(replayResponse));
+
+            if (decryptedReplayResponse && !decryptedReplayResponse.error) {
+                // Replay succeeded - include revival metadata in response
+                // Note: We can't easily modify the encrypted response, so we return it as-is
+                // The client should receive the session-revived event separately
+                logger.debug(`[API MACHINE] [REVIVAL] Command replay succeeded`);
+                return replayResponse;
+            }
+
+            // Replay failed - log and return the replay response (which contains the error)
+            logger.debug(`[API MACHINE] [REVIVAL] Command replay failed: ${decryptedReplayResponse?.error || 'Unknown error'}`);
+            return replayResponse;
+
+        } catch (error) {
+            // Decryption or processing error - return original response
+            logger.debug(`[API MACHINE] [REVIVAL] Error processing response: ${error instanceof Error ? error.message : 'Unknown'}`);
+            return initialResponse;
+        }
+    }
+
+    /**
+     * Get session revival metrics for observability.
+     *
+     * @returns Object with attempted, succeeded, and failed counts
+     * @see HAP-733
+     */
+    getRevivalMetrics(): { attempted: number; succeeded: number; failed: number } {
+        return { ...this.revivalMetrics };
     }
 
     /**
@@ -305,10 +602,11 @@ export class ApiMachineClient {
         };
         this.socket.on('disconnect', this.onSocketDisconnect);
 
-        // Single consolidated RPC handler
+        // Single consolidated RPC handler with session revival support (HAP-733)
         this.socket.onRpcRequest(async (data: { method: string, params: string }, callback: (response: string) => void) => {
             logger.debugLargeJson(`[API MACHINE] Received RPC request:`, data);
-            callback(await this.rpcHandlerManager.handleRequest(data));
+            // Use handleRpcWithRevival to automatically revive stopped sessions
+            callback(await this.handleRpcWithRevival(data));
         });
 
         // Handle update events from server

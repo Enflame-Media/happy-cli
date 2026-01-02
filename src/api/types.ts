@@ -147,6 +147,17 @@ export interface ClientToServerEvents {
       [key: string]: number
     }
   }) => void
+  /**
+   * Session revival event - emitted when a stopped session is automatically revived.
+   * Mobile app should update its session reference when receiving this event.
+   *
+   * @see HAP-733 - Automatic session revival on "Method not found" RPC errors
+   */
+  'session-revived': (data: {
+    originalSessionId: string
+    newSessionId: string
+    machineId: string
+  }) => void
 }
 
 // =============================================================================

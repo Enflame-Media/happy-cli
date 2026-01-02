@@ -61,6 +61,7 @@ const ERROR_DOC_MAP: Partial<Record<string, string>> = {
 
   // Session/Process errors - daemon and session management
   SESSION_NOT_FOUND: 'SESSIONS.md#session-not-found',
+  SESSION_REVIVAL_FAILED: 'SESSIONS.md#session-revival-failed',
   DAEMON_START_FAILED: 'DAEMON.md#start-failed',
   PROCESS_TIMEOUT: 'DAEMON.md#process-timeout',
   VERSION_MISMATCH: 'CLI.md#version-mismatch',

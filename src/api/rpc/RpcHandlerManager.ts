@@ -33,7 +33,30 @@ export const RPC_ERROR_CODES = {
     DECRYPTION_FAILED: 'DECRYPTION_FAILED',
     /** Internal handler error */
     INTERNAL_ERROR: 'INTERNAL_ERROR',
+    /** Session revival was attempted but failed */
+    SESSION_REVIVAL_FAILED: 'SESSION_REVIVAL_FAILED',
+    /** Session revival succeeded, command was replayed */
+    SESSION_REVIVED: 'SESSION_REVIVED',
 } as const;
+
+/**
+ * Result of a session revival attempt.
+ * Returned when the daemon automatically attempts to revive a stopped session.
+ *
+ * @see HAP-733 - Automatic session revival on "Method not found" RPC errors
+ */
+export interface SessionRevivalResult {
+    /** Whether the revival was successful */
+    revived: boolean;
+    /** New session ID if revival created a new session (Claude forks on --resume) */
+    newSessionId?: string;
+    /** Original session ID that was being revived */
+    originalSessionId: string;
+    /** Whether the original command was replayed after revival */
+    commandReplayed?: boolean;
+    /** Error message if revival failed */
+    error?: string;
+}
 
 /**
  * Interface for WebSocket-like objects that support RPC
