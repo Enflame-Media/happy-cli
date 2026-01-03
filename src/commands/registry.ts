@@ -8,6 +8,7 @@
  */
 
 import chalk from 'chalk'
+import { z } from 'zod'
 
 /**
  * Padding widths for consistent help text formatting
@@ -18,6 +19,57 @@ const PADDING = {
   SUBCOMMAND_USAGE: 40,
   SUBCOMMAND_OPTION_FLAGS: 20
 } as const
+
+// ============================================================================
+// Zod Schemas for Runtime Validation
+// ============================================================================
+
+/**
+ * Zod schema for command-line options
+ * Validates that flags start with - or -- and descriptions are non-empty
+ */
+const CommandOptionSchema = z.object({
+  flags: z.string()
+    .min(1, 'Option flags cannot be empty')
+    .regex(/^-/, 'Option flags must start with - or --'),
+  description: z.string().min(1, 'Option description cannot be empty')
+})
+
+/**
+ * Zod schema for subcommands
+ * Allows alphanumeric names with special characters for parameters like <name> or [optional]
+ */
+const SubCommandSchema = z.object({
+  name: z.string()
+    .min(1, 'Subcommand name cannot be empty')
+    .regex(/^[a-z0-9-()<>[\] ]+$/i, 'Subcommand name contains invalid characters'),
+  description: z.string().min(1, 'Subcommand description cannot be empty'),
+  options: z.array(CommandOptionSchema).optional()
+})
+
+/**
+ * Zod schema for command definitions
+ * Enforces CLI naming conventions and documentation requirements
+ */
+const CommandDefinitionSchema = z.object({
+  name: z.string()
+    .regex(/^[a-z0-9-]*$/, 'Command name must be lowercase alphanumeric with hyphens (or empty for default)'),
+  description: z.string()
+    .min(1, 'Command description cannot be empty')
+    .max(100, 'Command description too long (max 100 chars)'),
+  detailedDescription: z.string().optional(),
+  subcommands: z.array(SubCommandSchema).optional(),
+  options: z.array(CommandOptionSchema).optional(),
+  examples: z.array(z.string()).optional(),
+  notes: z.array(z.string()).optional(),
+  deprecated: z.boolean().optional(),
+  deprecationMessage: z.string().optional()
+}).refine(
+  (data) => !data.deprecated || data.deprecationMessage,
+  { message: 'Deprecated commands must have a deprecationMessage' }
+)
+
+// ============================================================================
 
 /**
  * Represents a command-line option with its description
@@ -264,6 +316,60 @@ const defaultCommand: CommandDefinition = {
     'Use any claude flag with happy as you would with claude.',
   ],
 }
+
+// ============================================================================
+// Runtime Validation
+// ============================================================================
+
+/**
+ * Validate all command definitions at module load
+ *
+ * This function runs once when the module is imported to catch malformed
+ * command definitions early. It validates:
+ * - All commands in the registry against CommandDefinitionSchema
+ * - The defaultCommand against the same schema
+ * - That command names within the registry are unique
+ *
+ * @throws Error with detailed validation failures if any command is malformed
+ */
+function validateCommandRegistry(): void {
+  const commandsSchema = z.record(z.string(), CommandDefinitionSchema)
+
+  try {
+    // Validate all commands
+    commandsSchema.parse(commands)
+
+    // Validate default command
+    CommandDefinitionSchema.parse(defaultCommand)
+
+    // Additional validation: Check for duplicate command names
+    const commandNames = Object.values(commands).map(cmd => cmd.name)
+    const duplicates = commandNames.filter((name, index) =>
+      commandNames.indexOf(name) !== index
+    )
+    if (duplicates.length > 0) {
+      throw new Error(`Duplicate command names found: ${duplicates.join(', ')}`)
+    }
+
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      const formattedErrors = error.issues.map((issue: z.ZodIssue) =>
+        `  - ${issue.path.join('.')}: ${issue.message}`
+      ).join('\n')
+
+      throw new Error(
+        `Command registry validation failed:\n${formattedErrors}\n\n` +
+        `Please fix the command definitions in src/commands/registry.ts`
+      )
+    }
+    throw error
+  }
+}
+
+// Run validation at module load
+validateCommandRegistry()
+
+// ============================================================================
 
 /**
  * Exit code definitions for CLI commands.
