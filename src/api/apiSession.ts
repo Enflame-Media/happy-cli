@@ -17,6 +17,7 @@ import { SocketDisconnectedError } from './socketUtils';
 import { extractErrorType, SyncMetrics, SyncMetricsCollector, SyncOutcome } from './syncMetrics';
 import type { MetadataUpdateResponse, StateUpdateResponse } from './socketUtils';
 import { ContextNotificationService, type UsageData } from './contextNotifications';
+import { fetchClaudeUsageLimits, USAGE_LIMITS_POLL_INTERVAL_MS } from '@/claude/usageLimits';
 
 /**
  * Event types emitted by ApiSessionClient
@@ -72,6 +73,10 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
     private readonly syncMetricsCollector = new SyncMetricsCollector();
     /** Optional context notification service for push notifications on high context usage @see HAP-343 */
     private contextNotificationService: ContextNotificationService | null = null;
+    /** Usage limits polling interval handle @see HAP-730 */
+    private usageLimitsPollingInterval: ReturnType<typeof setInterval> | null = null;
+    /** Whether usage limits polling is enabled @see HAP-730 */
+    private usageLimitsPollingEnabled = false;
 
     /**
      * Socket event handlers - stored as class properties to prevent GC (HAP-363)
@@ -160,6 +165,9 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
                 });
             }
             this.hasConnectedBefore = true;
+
+            // Start usage limits polling on connect/reconnect (HAP-730)
+            this.startUsageLimitsPolling();
         };
         this.socket.on('connect', this.onSocketConnect);
 
@@ -993,8 +1001,92 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
         }
     }
 
+    /**
+     * Start polling for usage limits from Anthropic OAuth API.
+     *
+     * When enabled, fetches usage limits every 60 seconds and sends them
+     * to the server via WebSocket for display in the mobile app.
+     *
+     * @see HAP-730 - Implement usage limits fetcher in happy-cli
+     */
+    startUsageLimitsPolling(): void {
+        if (this.usageLimitsPollingEnabled) {
+            logger.debug('[UsageLimits] Polling already enabled');
+            return;
+        }
+
+        this.usageLimitsPollingEnabled = true;
+        logger.debug('[UsageLimits] Starting usage limits polling');
+
+        // Fetch immediately on start
+        this.fetchAndSendUsageLimits().catch(error => {
+            logger.debug('[UsageLimits] Initial fetch failed:', error);
+        });
+
+        // Then poll every 60 seconds
+        this.usageLimitsPollingInterval = setInterval(() => {
+            this.fetchAndSendUsageLimits().catch(error => {
+                logger.debug('[UsageLimits] Polling fetch failed:', error);
+            });
+        }, USAGE_LIMITS_POLL_INTERVAL_MS);
+    }
+
+    /**
+     * Stop polling for usage limits.
+     *
+     * @see HAP-730 - Implement usage limits fetcher in happy-cli
+     */
+    stopUsageLimitsPolling(): void {
+        if (!this.usageLimitsPollingEnabled) {
+            return;
+        }
+
+        this.usageLimitsPollingEnabled = false;
+        if (this.usageLimitsPollingInterval) {
+            clearInterval(this.usageLimitsPollingInterval);
+            this.usageLimitsPollingInterval = null;
+        }
+        logger.debug('[UsageLimits] Stopped usage limits polling');
+    }
+
+    /**
+     * Fetch usage limits from Anthropic API and send to server.
+     *
+     * @see HAP-730 - Implement usage limits fetcher in happy-cli
+     */
+    private async fetchAndSendUsageLimits(): Promise<void> {
+        if (!this.socket.connected) {
+            logger.debug('[UsageLimits] Skipping - socket not connected');
+            return;
+        }
+
+        const limits = await fetchClaudeUsageLimits();
+        if (!limits) {
+            logger.debug('[UsageLimits] No limits data available');
+            return;
+        }
+
+        // Send plan limits to server
+        this.socket.emitClient('plan-limits', {
+            sessionId: this.sessionId,
+            sessionLimit: limits.sessionLimit,
+            weeklyLimits: limits.weeklyLimits,
+            lastUpdatedAt: limits.lastUpdatedAt,
+            limitsAvailable: limits.limitsAvailable,
+            provider: limits.provider,
+        });
+
+        logger.debug('[UsageLimits] Sent plan limits to server', {
+            sessionLimit: limits.sessionLimit?.percentageUsed,
+            weeklyLimitsCount: limits.weeklyLimits.length
+        });
+    }
+
     async close() {
         logger.debug('[API] socket.close() called');
+
+        // Stop usage limits polling
+        this.stopUsageLimitsPolling();
 
         // Cancel all pending RPC requests before closing
         this.rpcHandlerManager.cancelAllPendingRequests();

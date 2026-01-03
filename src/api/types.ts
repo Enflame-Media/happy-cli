@@ -158,6 +158,34 @@ export interface ClientToServerEvents {
     newSessionId: string
     machineId: string
   }) => void
+  /**
+   * Plan limits update event - emitted periodically with usage limit data from Anthropic API.
+   * Mobile app displays these limits to show user's current usage against plan limits.
+   *
+   * @see HAP-730 - Implement usage limits fetcher in happy-cli
+   */
+  'plan-limits': (data: {
+    sessionId: string
+    sessionLimit?: {
+      id: string
+      label: string
+      percentageUsed: number
+      resetsAt: number | null
+      resetDisplayType: 'countdown' | 'datetime'
+      description?: string
+    }
+    weeklyLimits: Array<{
+      id: string
+      label: string
+      percentageUsed: number
+      resetsAt: number | null
+      resetDisplayType: 'countdown' | 'datetime'
+      description?: string
+    }>
+    lastUpdatedAt: number
+    limitsAvailable: boolean
+    provider?: string
+  }) => void
 }
 
 // =============================================================================
