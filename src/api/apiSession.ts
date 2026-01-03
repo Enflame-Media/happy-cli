@@ -1066,17 +1066,16 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
             return;
         }
 
-        // Send plan limits to server
-        this.socket.emitClient('plan-limits', {
-            sessionId: this.sessionId,
+        // Send usage limits to server Durable Object for caching
+        // Event name must match handler in ConnectionManager.ts
+        this.socket.emitClient('update-usage-limits', {
             sessionLimit: limits.sessionLimit,
             weeklyLimits: limits.weeklyLimits,
-            lastUpdatedAt: limits.lastUpdatedAt,
             limitsAvailable: limits.limitsAvailable,
             provider: limits.provider,
         });
 
-        logger.debug('[UsageLimits] Sent plan limits to server', {
+        logger.debug('[UsageLimits] Sent usage limits to server', {
             sessionLimit: limits.sessionLimit?.percentageUsed,
             weeklyLimitsCount: limits.weeklyLimits.length
         });
