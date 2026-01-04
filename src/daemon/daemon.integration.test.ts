@@ -836,27 +836,75 @@ describe.skipIf(!await isServerHealthy())('Daemon Integration Tests', { timeout:
   /**
    * Pre-start Validation Tests (HAP-760)
    *
-   * Tests for daemon startup validation behavior:
+   * Tests for daemon startup validation behavior from HAP-755:
+   * - Failing with detailed message when daemon is already running (handleDaemonStart path)
    * - Detecting and cleaning up stale state (process dead but state file exists)
    * - Starting fresh after stale state cleanup
    *
-   * Note: The "already running" test already exists above as
-   * "should not allow starting a second daemon" (line 308-332)
+   * Note: There's also a similar test at line 308 "should not allow starting a
+   * second daemon" which tests the start-sync path. These tests specifically
+   * verify the NEW handleDaemonStart() pre-start validation from HAP-755.
    */
   describe('Pre-start validation (HAP-760)', () => {
-    beforeEach(async () => {
-      // Stop any running daemon first
-      await stopDaemon();
-      // Ensure no state file exists
-      await clearDaemonState();
-    });
-
     afterEach(async () => {
       await stopDaemon();
       await clearDaemonState();
     });
 
+    it('should fail with detailed message when daemon is already running', async () => {
+      // First, ensure clean state and start a daemon
+      await stopDaemon();
+      await clearDaemonState();
+
+      void spawnHappyCLI(['daemon', 'start'], { stdio: 'ignore' });
+
+      await waitFor(async () => {
+        const state = await readDaemonState();
+        return state !== null && state.pid > 0;
+      }, 10_000, 250);
+
+      const runningState = await readDaemonState();
+      expect(runningState).not.toBeNull();
+
+      console.log(`[TEST] Daemon running with PID: ${runningState!.pid}`);
+
+      // Try to start another daemon using 'daemon start' (not start-sync)
+      // This tests the NEW handleDaemonStart() pre-start validation from HAP-755
+      const secondChild = spawn('yarn', ['tsx', 'src/index.ts', 'daemon', 'start'], {
+        cwd: process.cwd(),
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+
+      let output = '';
+      secondChild.stdout?.on('data', (data) => {
+        output += data.toString();
+      });
+      secondChild.stderr?.on('data', (data) => {
+        output += data.toString();
+      });
+
+      // Wait for the second daemon attempt to exit
+      const exitCode = await new Promise<number | null>((resolve) => {
+        secondChild.on('exit', (code) => resolve(code));
+      });
+
+      // Verify the NEW pre-start validation behavior from HAP-755:
+      // - Detailed error message with PID and Port
+      // - Suggests using restart or stop commands
+      expect(output).toContain('already running');
+      expect(output).toContain('PID:');
+      expect(output).toContain('Port:');
+      expect(output).toContain('restart');
+      expect(exitCode).not.toBe(0);
+
+      console.log('[TEST] Pre-start validation correctly rejected second daemon start with detailed message');
+    });
+
     it('should clean up stale state and start successfully', async () => {
+      // Stop any running daemon first
+      await stopDaemon();
+      await clearDaemonState();
       // Create stale state: write a state file with a PID that doesn't exist
       // Use a high PID that's unlikely to be running
       const stalePid = 99999999;
