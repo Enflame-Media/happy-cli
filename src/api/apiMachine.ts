@@ -40,6 +40,12 @@ type MachineRpcHandlers = {
      * @see HAP-642 - Added to allow mobile app to check session status before calling session-specific RPC methods
      */
     getSessionStatus: (sessionId: string) => GetSessionStatusResponse;
+    /**
+     * Get the working directory for a session by ID.
+     * Returns undefined if session is not found or directory is not tracked.
+     * @see HAP-740 - Track session working directory for revival
+     */
+    getSessionDirectory: (sessionId: string) => string | undefined;
 }
 
 export class ApiMachineClient {
@@ -125,10 +131,11 @@ export class ApiMachineClient {
         spawnSession,
         stopSession,
         requestShutdown,
-        getSessionStatus
+        getSessionStatus,
+        getSessionDirectory
     }: MachineRpcHandlers) {
-        // Store handlers for revival access (HAP-733)
-        this.rpcHandlers = { spawnSession, stopSession, requestShutdown, getSessionStatus };
+        // Store handlers for revival access (HAP-733, HAP-740)
+        this.rpcHandlers = { spawnSession, stopSession, requestShutdown, getSessionStatus, getSessionDirectory };
 
         // Register spawn session handler
         type SpawnSessionParams = {
@@ -495,9 +502,14 @@ export class ApiMachineClient {
             logger.debug(`[API MACHINE] [REVIVAL] Detected SESSION_NOT_ACTIVE for ${sessionId.substring(0, 8)}...:${methodName}`);
 
             // Attempt to revive the session
-            // TODO: Get directory from session metadata or a registry
-            // For now, use current working directory as fallback
-            const directory = process.cwd();
+            // HAP-740: Look up stored directory from session tracking, fall back to cwd
+            const storedDirectory = this.rpcHandlers?.getSessionDirectory(sessionId);
+            const directory = storedDirectory ?? process.cwd();
+            if (storedDirectory) {
+                logger.debug(`[API MACHINE] [REVIVAL] Using stored directory: ${storedDirectory}`);
+            } else {
+                logger.debug(`[API MACHINE] [REVIVAL] No stored directory, using fallback: ${directory}`);
+            }
             const revivalResult = await this.tryReviveSession(sessionId, directory);
 
             if (!revivalResult.revived) {

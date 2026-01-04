@@ -344,7 +344,9 @@ export async function startDaemon(): Promise<void> {
           startedBy: 'happy directly - likely by user from terminal',
           happySessionId: sessionId,
           happySessionMetadataFromLocalWebhook: sessionMetadata,
-          pid
+          pid,
+          // HAP-740: Extract working directory from session metadata (path field)
+          workingDirectory: sessionMetadata.path
         };
         pidToTrackedSession.set(pid, trackedSession);
         logger.debug(`[DAEMON RUN] Registered externally-started session ${sessionId}`);
@@ -517,7 +519,9 @@ export async function startDaemon(): Promise<void> {
           childProcess: happyProcess,
           directoryCreated,
           message: directoryCreated ? `The path '${directory}' did not exist. We created a new folder and spawned a new session there.` : undefined,
-          codexTempDir
+          codexTempDir,
+          // HAP-740: Store working directory for session revival
+          workingDirectory: directory
         };
 
         pidToTrackedSession.set(happyProcess.pid, trackedSession);
@@ -628,6 +632,38 @@ export async function startDaemon(): Promise<void> {
         sessionId: normalizedId,
         message: 'Session is not active on this machine. It may have stopped, been archived, or never existed.'
       };
+    };
+
+    /**
+     * Get the working directory for a session by its session ID.
+     * Used for session revival to spawn the revived session in the correct directory.
+     * @see HAP-740 - Track session working directory for revival
+     */
+    const getSessionDirectory = (sessionId: string): string | undefined => {
+      logger.debug(`[DAEMON RUN] Looking up directory for session ${sessionId}`);
+
+      // Normalize input for comparison
+      let normalizedId: string;
+      try {
+        normalizedId = normalizeSessionId(sessionId);
+      } catch (error) {
+        if (error instanceof InvalidSessionIdError) {
+          logger.debug(`[DAEMON RUN] Invalid session ID format: ${sessionId}`);
+          return undefined;
+        }
+        throw error;
+      }
+
+      // Find session by ID
+      for (const session of pidToTrackedSession.values()) {
+        if (session.happySessionId?.toLowerCase() === normalizedId) {
+          logger.debug(`[DAEMON RUN] Found session ${sessionId}, directory: ${session.workingDirectory}`);
+          return session.workingDirectory;
+        }
+      }
+
+      logger.debug(`[DAEMON RUN] Session ${sessionId} not found in tracked sessions`);
+      return undefined;
     };
 
     // Stop a session by sessionId or PID fallback
@@ -768,7 +804,8 @@ export async function startDaemon(): Promise<void> {
       spawnSession,
       stopSession,
       requestShutdown: () => requestShutdown('happy-app'),
-      getSessionStatus
+      getSessionStatus,
+      getSessionDirectory // HAP-740: For session revival directory lookup
     });
 
     // Connect to server

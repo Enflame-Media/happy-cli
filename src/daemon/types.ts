@@ -54,6 +54,12 @@ export interface TrackedSession {
   message?: string;
   /** Temporary directory created for Codex sessions (for auth.json storage). Cleaned up on session exit. */
   codexTempDir?: DirResult;
+  /**
+   * Working directory where the session was started.
+   * Used for session revival to ensure the revived session uses the same directory.
+   * @see HAP-740 - Track session working directory for revival
+   */
+  workingDirectory?: string;
 }
 
 
