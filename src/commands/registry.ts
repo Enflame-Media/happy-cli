@@ -220,6 +220,7 @@ export const commands: Record<string, CommandDefinition> = {
     subcommands: [
       { name: 'start', description: 'Start the daemon (detached)' },
       { name: 'stop', description: 'Stop the daemon (sessions stay alive)' },
+      { name: 'restart', description: 'Stop running daemon and start new instance' },
       { name: 'status', description: 'Show daemon status', options: [{ flags: '--json', description: 'Output in JSON format for scripting' }] },
       { name: 'health', description: 'Show daemon health metrics', options: [{ flags: '--json', description: 'Output in JSON format for scripting' }] },
       { name: 'list', description: 'List active sessions' },
@@ -230,6 +231,8 @@ export const commands: Record<string, CommandDefinition> = {
     ],
     examples: [
       'happy daemon start',
+      'happy daemon stop',
+      'happy daemon restart',
       'happy daemon status',
       'happy daemon status --json',
       'happy daemon health',

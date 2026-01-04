@@ -56,6 +56,11 @@ export async function handleDaemonCommand(args: string[]): Promise<void> {
     process.exit(EXIT_CODES.SUCCESS.code)
   }
 
+  if (daemonSubcommand === 'restart') {
+    await handleDaemonRestart()
+    return
+  }
+
   if (daemonSubcommand === 'status') {
     await handleDaemonStatus(args.slice(1))
     return
@@ -144,6 +149,28 @@ async function handleStopSession(sessionId: string | undefined): Promise<void> {
 }
 
 async function handleDaemonStart(): Promise<void> {
+  // Pre-start validation: check if daemon is already running
+  const daemonCheck = await checkIfDaemonRunningAndCleanupStaleState()
+
+  if (daemonCheck.status === 'running') {
+    console.error(chalk.red('✗ Daemon is already running'))
+    console.log(chalk.gray(`  PID: ${daemonCheck.pid}`))
+    console.log(chalk.gray(`  Port: ${daemonCheck.httpPort}`))
+    if (daemonCheck.version) {
+      console.log(chalk.gray(`  Version: ${daemonCheck.version}`))
+    }
+    console.log()
+    console.log(chalk.yellow('To restart the daemon:'))
+    console.log(chalk.gray('  happy daemon restart'))
+    console.log()
+    console.log(chalk.yellow('To stop the daemon:'))
+    console.log(chalk.gray('  happy daemon stop'))
+    process.exit(EXIT_CODES.GENERAL_ERROR.code)
+  }
+
+  // If status is 'stale', the check function already cleaned it up
+  // If status is 'stopped' or 'error', we can proceed with starting
+
   // Spawn detached daemon process
   const child = spawnHappyCLI(['daemon', 'start-sync'], {
     detached: true,
@@ -188,6 +215,60 @@ async function handleDaemonStart(): Promise<void> {
       } catch {
         // Process doesn't exist, true failure
       }
+    }
+
+    process.exit(EXIT_CODES.GENERAL_ERROR.code)
+  }
+  process.exit(EXIT_CODES.SUCCESS.code)
+}
+
+async function handleDaemonRestart(): Promise<void> {
+  // Check current daemon state
+  const daemonCheck = await checkIfDaemonRunningAndCleanupStaleState()
+
+  if (daemonCheck.status === 'running') {
+    console.log(chalk.yellow('Stopping daemon...'))
+    await stopDaemon()
+    console.log(chalk.green('✓ Daemon stopped'))
+  } else if (daemonCheck.status === 'stale') {
+    // Stale state was already cleaned up by the check function
+    console.log(chalk.gray('Cleaned up stale daemon state'))
+  }
+  // For 'stopped' or 'error' status, we just proceed to start
+
+  console.log(chalk.yellow('Starting daemon...'))
+
+  // Spawn detached daemon process (same logic as handleDaemonStart)
+  const child = spawnHappyCLI(['daemon', 'start-sync'], {
+    detached: true,
+    stdio: 'ignore',
+    env: process.env
+  })
+  child.unref()
+
+  // Wait for daemon to write state file (up to 5 seconds)
+  let started = false
+  const maxAttempts = 50
+  for (let i = 0; i < maxAttempts; i++) {
+    const checkResult = await checkIfDaemonRunningAndCleanupStaleState()
+    if (checkResult.status === 'running') {
+      started = true
+      break
+    }
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+
+  if (started) {
+    console.log(chalk.green('✓ Daemon restarted successfully'))
+    console.log(chalk.gray('  Check status: happy daemon status'))
+  } else {
+    console.error(chalk.red('✗ Daemon did not start within 5 seconds'))
+
+    // Try to get logs for debugging
+    const latestLog = await getLatestDaemonLog()
+    if (latestLog) {
+      console.log(chalk.yellow('Check logs for details:'))
+      console.log(chalk.gray(`  ${latestLog.path}`))
     }
 
     process.exit(EXIT_CODES.GENERAL_ERROR.code)
