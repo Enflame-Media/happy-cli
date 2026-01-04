@@ -22,8 +22,15 @@ import { buildMcpSyncState } from '@/mcp/config';
 const KEEP_ALIVE_BASE_INTERVAL_MS = 20000; // 20 seconds base interval
 const KEEP_ALIVE_JITTER_MAX_MS = 5000; // 0-5 seconds random jitter
 
-// Session revival configuration (HAP-733)
+// Session revival configuration (HAP-733, HAP-782)
 const SESSION_REVIVAL_TIMEOUT_MS = parseInt(process.env.HAPPY_SESSION_REVIVAL_TIMEOUT || '60000', 10);
+const SESSION_REVIVAL_MAX_ATTEMPTS = (() => {
+    const value = parseInt(process.env.HAPPY_SESSION_REVIVAL_MAX_ATTEMPTS || '3', 10);
+    if (Number.isNaN(value) || value < 1) {
+        return 3; // Default to 3 if invalid
+    }
+    return value;
+})();
 
 import type { GetSessionStatusResponse } from '@/daemon/types';
 import { isValidSessionId, normalizeSessionId } from '@/claude/utils/sessionValidation';
@@ -91,9 +98,10 @@ export class ApiMachineClient {
      * Cleared when revival succeeds or when session is no longer referenced.
      *
      * @see HAP-744 - Fix session revival race condition causing infinite loop
+     * @see HAP-782 - Made configurable via HAPPY_SESSION_REVIVAL_MAX_ATTEMPTS
      */
     private sessionRevivalAttempts: Map<string, number> = new Map();
-    private readonly MAX_REVIVAL_ATTEMPTS_PER_SESSION = 3;
+    private readonly MAX_REVIVAL_ATTEMPTS_PER_SESSION = SESSION_REVIVAL_MAX_ATTEMPTS;
 
     /**
      * Global revival cooldown tracking to prevent cascade failures.
