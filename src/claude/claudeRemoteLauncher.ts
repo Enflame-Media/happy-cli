@@ -454,11 +454,22 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
             } catch (e) {
                 logger.debug('[remote]: launch error', e);
                 if (!exitReason) {
+                    // HAP-XXX: Check socket connection state before trying to send event
+                    // If socket is already disconnected, we're shutting down - exit immediately
+                    if (!session.client.connected) {
+                        logger.warn('[remote] Socket already disconnected - exiting instead of restarting');
+                        exitReason = 'exit';
+                        break;
+                    }
                     try {
                         session.client.sendSessionEvent({ type: 'message', message: 'Process exited unexpectedly' });
                     } catch (error) {
                         if (error instanceof SocketDisconnectedError) {
-                            logger.warn('[remote] Socket disconnected - cannot send error event');
+                            // HAP-XXX: Socket disconnected means we're shutting down (e.g., killSession)
+                            // Don't restart - exit the loop to avoid spawning a blank session
+                            logger.warn('[remote] Socket disconnected - exiting instead of restarting');
+                            exitReason = 'exit';
+                            break;
                         } else {
                             throw error;
                         }

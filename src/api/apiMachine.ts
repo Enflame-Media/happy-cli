@@ -6,7 +6,7 @@
  */
 
 import { AppError, ErrorCodes } from '@/utils/errors';
-import { getSessionIdFromEphemeral, getMachineIdFromEphemeral, ApiDeleteMachineSchema, type SessionIdEphemeral, type MachineIdEphemeral } from '@happy/protocol';
+import { getSessionId, getSessionIdFromEphemeral, getMachineIdFromEphemeral, ApiDeleteMachineSchema, type SessionIdEphemeral, type MachineIdEphemeral } from '@happy/protocol';
 import { logger } from '@/ui/logger';
 import { configuration } from '@/configuration';
 import { EphemeralUpdate, MachineMetadata, DaemonState, Machine, Update, UpdateMachineBody } from './types';
@@ -116,6 +116,11 @@ export class ApiMachineClient {
     private readonly COOLDOWN_WINDOW_MS = 30000; // 30 seconds
     private readonly COOLDOWN_FAILURE_THRESHOLD = 10; // 10 failures in window
     private readonly COOLDOWN_DURATION_MS = 60000; // 60 second cooldown
+
+    /**
+     * Tracks sessions that were archived remotely to prevent revival attempts.
+     */
+    private archivedSessionIds: Set<string> = new Set();
 
     /**
      * Socket event handlers - stored as class properties to prevent GC (HAP-363)
@@ -574,6 +579,18 @@ export class ApiMachineClient {
                 return initialResponse;
             }
 
+            const normalizedSessionId = normalizeSessionId(sessionId);
+
+            // Never revive sessions on explicit archive/kill requests
+            if (methodName === 'killSession') {
+                return initialResponse;
+            }
+
+            // Skip revival if the session has been archived remotely
+            if (this.archivedSessionIds.has(normalizedSessionId)) {
+                return initialResponse;
+            }
+
             logger.debug(`[API MACHINE] [REVIVAL] Detected SESSION_NOT_ACTIVE for ${sessionId.substring(0, 8)}...:${methodName}`);
 
             // Attempt to revive the session
@@ -879,7 +896,12 @@ export class ApiMachineClient {
                 }
                 // Silently ignore delete events for other machines
                 return;
-            } else if (updateType === 'new-session' || updateType === 'update-session' || updateType === 'new-message' || updateType === 'delete-session') {
+            } else if (updateType === 'delete-session') {
+                // Track archived sessions to prevent revival attempts
+                const deletedSessionId = normalizeSessionId(getSessionId(data.body));
+                this.archivedSessionIds.add(deletedSessionId);
+                return;
+            } else if (updateType === 'new-session' || updateType === 'update-session' || updateType === 'new-message') {
                 // Silently ignore session-scoped updates (handled by session clients, not machine client)
                 return;
             } else if (updateType === 'update-account') {

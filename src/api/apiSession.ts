@@ -79,6 +79,15 @@ export class ApiSessionClient extends EventEmitter implements TypedEventEmitter 
     private usageLimitsPollingEnabled = false;
 
     /**
+     * Returns whether the socket is currently connected.
+     * Useful for checking connection state before attempting operations.
+     * @see HAP-XXX - Used to detect shutdown state in launchers
+     */
+    get connected(): boolean {
+        return this.socket.connected;
+    }
+
+    /**
      * Socket event handlers - stored as class properties to prevent GC (HAP-363)
      * WeakRef-based HappyWebSocket requires handlers to be retained by the caller.
      */

@@ -296,6 +296,9 @@ export async function runGemini(opts: {
 
   const handleKillSession = async () => {
     logger.debug('[Gemini] Kill session requested - terminating process');
+    // HAP-XXX: Set shouldExit BEFORE abort to prevent loop from continuing
+    // This ensures the while loop exits cleanly when kill is requested
+    shouldExit = true;
     await handleAbort();
     logger.debug('[Gemini] Abort completed, proceeding with termination');
 

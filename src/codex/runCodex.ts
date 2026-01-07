@@ -343,6 +343,9 @@ export async function runCodex(opts: {
      */
     const handleKillSession = async () => {
         logger.debug('[Codex] Kill session requested - terminating process');
+        // HAP-XXX: Set shouldExit BEFORE abort to prevent loop from continuing
+        // This ensures the while loop exits cleanly when kill is requested
+        shouldExit = true;
         await handleAbort();
         logger.debug('[Codex] Abort completed, proceeding with termination');
 

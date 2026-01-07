@@ -134,11 +134,22 @@ export async function claudeLocalLauncher(session: Session): Promise<'switch' | 
             } catch (e) {
                 logger.debug('[local]: launch error', e);
                 if (!exitReason) {
+                    // HAP-XXX: Check socket connection state before trying to send event
+                    // If socket is already disconnected, we're shutting down - exit immediately
+                    if (!session.client.connected) {
+                        logger.warn('[local] Socket already disconnected - exiting instead of restarting');
+                        exitReason = 'exit';
+                        break;
+                    }
                     try {
                         session.client.sendSessionEvent({ type: 'message', message: 'Process exited unexpectedly' });
                     } catch (sendError) {
                         if (sendError instanceof SocketDisconnectedError) {
-                            logger.warn('[local] Socket disconnected - cannot send error event');
+                            // HAP-XXX: Socket disconnected means we're shutting down (e.g., killSession)
+                            // Don't restart - exit the loop to avoid spawning a blank session
+                            logger.warn('[local] Socket disconnected - exiting instead of restarting');
+                            exitReason = 'exit';
+                            break;
                         } else {
                             throw sendError;
                         }
