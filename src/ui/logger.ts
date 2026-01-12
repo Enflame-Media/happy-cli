@@ -11,6 +11,7 @@ import { configuration } from '@/configuration'
 import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs'
 import { join, basename, dirname } from 'node:path'
 import { AppError, getHelpfulMessage, getAppErrorDocUrl } from '@/utils/errors'
+import { validateRemoteLoggingUrl } from '@/utils/validateEnv'
 // Note: readDaemonState is imported dynamically in listDaemonLogFiles() to avoid
 // circular dependency: logger.ts -> persistence.ts -> logger.ts
 
@@ -180,16 +181,24 @@ class Logger {
   ) {
     // Remote logging requires explicit opt-in via DEBUG=1 (HAP-829)
     // This is a safety measure to prevent accidental data exposure.
-    // All three conditions must be met:
+    // All four conditions must be met:
     // 1. DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING is set
     // 2. HAPPY_SERVER_URL is set
     // 3. DEBUG=1 is explicitly set (explicit opt-in)
+    // 4. URL must use HTTPS (or HTTP for localhost only) (HAP-830)
     if (process.env.DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING
       && process.env.HAPPY_SERVER_URL
       && process.env.DEBUG) {
-      this.dangerouslyUnencryptedServerLoggingUrl = process.env.HAPPY_SERVER_URL
-      console.error(chalk.yellow('[REMOTE LOGGING] Sending logs to server for AI debugging'))
-      console.error(chalk.yellow('[REMOTE LOGGING] WARNING: This sends unencrypted session data to the server!'))
+      // Validate URL uses secure transport (HAP-830)
+      const urlValidation = validateRemoteLoggingUrl(process.env.HAPPY_SERVER_URL)
+      if (urlValidation.valid) {
+        this.dangerouslyUnencryptedServerLoggingUrl = urlValidation.url
+        console.error(chalk.yellow('[REMOTE LOGGING] Sending logs to server for AI debugging'))
+        console.error(chalk.yellow('[REMOTE LOGGING] WARNING: This sends unencrypted session data to the server!'))
+      } else {
+        // URL failed security validation - block remote logging
+        console.error(chalk.red('[REMOTE LOGGING BLOCKED] ' + urlValidation.error))
+      }
     } else if (process.env.DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING
       && process.env.HAPPY_SERVER_URL
       && !process.env.DEBUG) {

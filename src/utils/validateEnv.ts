@@ -147,6 +147,83 @@ interface ValidationResult {
 }
 
 /**
+ * Result of validating a remote logging URL (HAP-830)
+ */
+export interface RemoteLoggingUrlValidation {
+  /** Whether the URL is valid for remote logging */
+  valid: boolean
+  /** The validated URL (only set if valid is true) */
+  url?: string
+  /** Error message explaining why the URL is invalid (only set if valid is false) */
+  error?: string
+}
+
+/**
+ * Validates a URL for remote logging to ensure secure transport (HAP-830)
+ *
+ * Security requirements:
+ * - HTTPS is required for non-local URLs to prevent log data interception
+ * - HTTP is allowed only for localhost/127.0.0.1 to support local development
+ * - Invalid URLs are rejected with clear error messages
+ *
+ * @param url - The URL to validate
+ * @returns Validation result with either the validated URL or an error message
+ *
+ * @example
+ * ```typescript
+ * const result = validateRemoteLoggingUrl('https://api.example.com');
+ * if (result.valid) {
+ *   console.log('Using:', result.url);
+ * } else {
+ *   console.error('Invalid:', result.error);
+ * }
+ * ```
+ */
+export function validateRemoteLoggingUrl(url: string): RemoteLoggingUrlValidation {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return {
+      valid: false,
+      error: `Invalid URL format: "${url}". Please provide a valid URL (e.g., https://api.example.com).`,
+    }
+  }
+
+  const protocol = parsed.protocol.toLowerCase()
+  const hostname = parsed.hostname.toLowerCase()
+
+  // HTTPS is always allowed
+  if (protocol === 'https:') {
+    return { valid: true, url }
+  }
+
+  // HTTP is only allowed for localhost (local development)
+  if (protocol === 'http:') {
+    const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1'
+    if (isLocalhost) {
+      return { valid: true, url }
+    }
+
+    return {
+      valid: false,
+      error:
+        `Remote logging URL "${url}" uses HTTP which is insecure for non-local hosts. ` +
+        `Use HTTPS to protect log data in transit (e.g., https://${parsed.host}${parsed.pathname}). ` +
+        `HTTP is only allowed for localhost/127.0.0.1 during local development.`,
+    }
+  }
+
+  // Unknown protocol
+  return {
+    valid: false,
+    error:
+      `Remote logging URL "${url}" uses unsupported protocol "${protocol}". ` +
+      `Only HTTPS (and HTTP for localhost) are supported.`,
+  }
+}
+
+/**
  * Checks environment variables and returns configuration status.
  * Unlike the server, CLI env vars are all optional with sensible defaults.
  */
