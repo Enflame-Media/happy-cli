@@ -45,6 +45,87 @@ const MAX_LOG_SIZE = 10 * 1024 * 1024 // 10MB
 const MAX_LOG_FILES = 5
 
 /**
+ * Remote log batching configuration (HAP-833)
+ * Batches multiple log entries into a single request to reduce overhead
+ */
+const REMOTE_LOG_BATCH_CONFIG = {
+  /** Maximum number of log entries per batch */
+  MAX_BATCH_SIZE: 20,
+  /** Flush interval in milliseconds (send batch every N ms if not empty) */
+  FLUSH_INTERVAL_MS: 1000,
+} as const
+
+/**
+ * Represents a single log entry waiting to be sent to the remote server (HAP-833)
+ */
+type RemoteLogEntry = {
+  timestamp: string
+  level: string
+  message: string
+  messageRawObject: unknown
+  source: 'cli'
+  platform: NodeJS.Platform
+}
+
+/**
+ * Remote logging payload size limits (HAP-820, HAP-832)
+ * These must match the server-side limits in happy-server-workers/src/schemas/dev.ts
+ * to prevent 413 Payload Too Large errors
+ */
+export const REMOTE_LOG_SIZE_LIMITS = {
+  /** Maximum length for the message string (~50KB) */
+  MAX_MESSAGE_LENGTH: 50 * 1024, // 50KB
+  /** Maximum serialized size for messageRawObject (~100KB) */
+  MAX_RAW_OBJECT_SIZE: 100 * 1024, // 100KB
+} as const
+
+/**
+ * Truncates a message to fit within the maximum allowed length for remote logging (HAP-820, HAP-832)
+ * Adds a truncation indicator when the message is cut off.
+ *
+ * @param message - The message to potentially truncate
+ * @param maxLength - Maximum allowed length (defaults to REMOTE_LOG_SIZE_LIMITS.MAX_MESSAGE_LENGTH)
+ * @returns The original or truncated message
+ */
+export function truncateMessageForRemote(message: string, maxLength: number = REMOTE_LOG_SIZE_LIMITS.MAX_MESSAGE_LENGTH): string {
+  if (message.length <= maxLength) return message
+  const truncationSuffix = '... [truncated for remote logging]'
+  const allowedLength = maxLength - truncationSuffix.length
+  return message.substring(0, allowedLength) + truncationSuffix
+}
+
+/**
+ * Truncates a raw object to fit within the maximum allowed serialized size (HAP-820, HAP-832)
+ * If the object is too large, returns a placeholder indicating truncation.
+ *
+ * @param obj - The object to potentially truncate
+ * @param maxSize - Maximum allowed serialized size (defaults to REMOTE_LOG_SIZE_LIMITS.MAX_RAW_OBJECT_SIZE)
+ * @returns The original object or a truncation placeholder
+ */
+export function truncateRawObjectForRemote(obj: unknown, maxSize: number = REMOTE_LOG_SIZE_LIMITS.MAX_RAW_OBJECT_SIZE): unknown {
+  if (obj === undefined || obj === null) return obj
+
+  try {
+    const serialized = JSON.stringify(obj)
+    if (serialized.length <= maxSize) return obj
+
+    // Object is too large - return truncation indicator with size info
+    return {
+      _truncated: true,
+      _originalSize: serialized.length,
+      _maxSize: maxSize,
+      _message: 'Object truncated for remote logging (HAP-832)',
+    }
+  } catch {
+    // Serialization failed - return error indicator
+    return {
+      _truncated: true,
+      _error: 'Object could not be serialized',
+    }
+  }
+}
+
+/**
  * Type guard for Node.js system errors with error codes
  */
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
@@ -55,10 +136,10 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
  * Consistent date/time formatting functions
  */
 function createTimestampForFilename(date: Date = new Date()): string {
-  return date.toLocaleString('sv-SE', { 
+  return date.toLocaleString('sv-SE', {
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     year: 'numeric',
-    month: '2-digit', 
+    month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
@@ -67,7 +148,7 @@ function createTimestampForFilename(date: Date = new Date()): string {
 }
 
 function createTimestampForLogEntry(date: Date = new Date()): string {
-  return date.toLocaleTimeString('en-US', { 
+  return date.toLocaleTimeString('en-US', {
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     hour12: false,
     hour: '2-digit',
@@ -176,6 +257,15 @@ class Logger {
    */
   private logWriteErrors: { timestamp: Date; error: Error; context?: string }[] = []
 
+  /**
+   * Remote log batching state (HAP-833)
+   * Accumulates log entries and sends them in batches to reduce network overhead
+   */
+  private remoteLogBatch: RemoteLogEntry[] = []
+  private remoteLogFlushTimer: ReturnType<typeof setInterval> | null = null
+  private isFlushingRemoteLogs: boolean = false
+  private remoteLogFlushErrors: number = 0
+
   constructor(
     public readonly logFilePath = getSessionLogPath()
   ) {
@@ -213,6 +303,12 @@ class Logger {
 
     // Initialize current log size from existing file
     this.initializeLogSize()
+
+    // Initialize remote log batch flushing if remote logging is enabled (HAP-833)
+    if (this.dangerouslyUnencryptedServerLoggingUrl) {
+      this.startRemoteLogBatchFlushTimer()
+      this.registerProcessExitHandler()
+    }
   }
 
   /**
@@ -420,11 +516,11 @@ class Logger {
     // Some of our messages are huge, but we still want to show them in the logs
     const truncateStrings = (obj: unknown): unknown => {
       if (typeof obj === 'string') {
-        return obj.length > maxStringLength 
+        return obj.length > maxStringLength
           ? obj.substring(0, maxStringLength) + '... [truncated for logs]'
           : obj
       }
-      
+
       if (Array.isArray(obj)) {
         const truncatedArray = obj.map(item => truncateStrings(item)).slice(0, maxArrayLength)
         if (obj.length > maxArrayLength) {
@@ -432,7 +528,7 @@ class Logger {
         }
         return truncatedArray
       }
-      
+
       if (obj && typeof obj === 'object') {
         const result: Record<string, unknown> = {}
         for (const [key, value] of Object.entries(obj)) {
@@ -444,7 +540,7 @@ class Logger {
         }
         return result
       }
-      
+
       return obj
     }
 
@@ -454,27 +550,27 @@ class Logger {
     const json = JSON.stringify(truncatedObject, null, 2)
     this.logToFile(`[${this.localTimezoneTimestamp()}]`, message, '\n', json)
   }
-  
+
   info(message: string, ...args: unknown[]): void {
     this.logToConsole('info', '', message, ...args)
     this.debug(message, args)
   }
-  
+
   infoDeveloper(message: string, ...args: unknown[]): void {
     // Always write to debug
     this.debug(message, ...args)
-    
+
     // Write to info if DEBUG mode is on
     if (process.env.DEBUG) {
       this.logToConsole('info', '[DEV]', message, ...args)
     }
   }
-  
+
   warn(message: string, ...args: unknown[]): void {
     this.logToConsole('warn', '', message, ...args)
     this.debug(`[WARN] ${message}`, ...args)
   }
-  
+
   getLogPath(): string {
     return this.logFilePath
   }
@@ -546,13 +642,13 @@ class Logger {
 
   /**
    * Reports an error to the user with improved messaging.
-   * 
+   *
    * Key behaviors:
    * - Always shows user-friendly message to console
    * - Always logs full error details (stack trace, etc.) to file
    * - Shows actionable suggestions when provided
    * - In DEBUG mode, shows full stack trace to console
-   * 
+   *
    * @param message - User-friendly error message
    * @param error - The error object (optional)
    * @param options - Additional options for error display
@@ -572,11 +668,11 @@ class Logger {
     } = {}
   ): void {
     const { suggestDebug = true, showStack = false, actionHint, technical = false } = options
-    
+
     // Extract error details
     const errorMessage = error instanceof Error ? error.message : error ? String(error) : undefined
     const errorStack = error instanceof Error ? error.stack : undefined
-    
+
     // Always log full details to file
     this.logToFile(
       `[${this.localTimezoneTimestamp()}] [ERROR]`,
@@ -584,38 +680,38 @@ class Logger {
       errorMessage ? `\nError: ${errorMessage}` : '',
       errorStack ? `\nStack: ${errorStack}` : ''
     )
-    
+
     // For technical errors, only show in DEBUG mode
     if (technical) {
       if (process.env.DEBUG) {
         console.error(chalk.gray('[DEBUG]'), chalk.red(message))
         if (errorMessage) {
-          console.error(chalk.gray('  →'), errorMessage)
+          console.error(chalk.gray('  ->'), errorMessage)
         }
       }
       return
     }
-    
+
     // Show user-friendly error to console
     console.error(chalk.red('Error:'), message)
-    
+
     // Show error message if different from the main message
     if (errorMessage && errorMessage !== message) {
-      console.error(chalk.gray('  →'), errorMessage)
+      console.error(chalk.gray('  ->'), errorMessage)
     }
-    
+
     // Show stack trace if DEBUG mode or explicitly requested
     if (showStack || process.env.DEBUG) {
       if (errorStack) {
         console.error(chalk.gray(errorStack))
       }
     }
-    
+
     // Show action hint if provided
     if (actionHint) {
       console.error(chalk.gray(`  ${actionHint}`))
     }
-    
+
     // Suggest DEBUG mode if appropriate and not already in DEBUG
     if (suggestDebug && !process.env.DEBUG && !showStack) {
       console.error(chalk.gray(`  Run with --verbose or DEBUG=1 for more details. Logs: ${this.logFilePath}`))
@@ -739,8 +835,102 @@ class Logger {
     }
   }
 
-  private async sendToRemoteServer(level: string, message: string, ...args: unknown[]): Promise<void> {
+  /**
+   * Starts the periodic flush timer for remote log batching (HAP-833)
+   * The timer fires every FLUSH_INTERVAL_MS and sends accumulated logs
+   */
+  private startRemoteLogBatchFlushTimer(): void {
+    if (this.remoteLogFlushTimer) return // Already started
+
+    this.remoteLogFlushTimer = setInterval(() => {
+      this.flushRemoteLogBatch().catch(() => {
+        // Silently ignore flush errors to prevent loops
+      })
+    }, REMOTE_LOG_BATCH_CONFIG.FLUSH_INTERVAL_MS)
+
+    // Ensure timer doesn't prevent process exit
+    if (this.remoteLogFlushTimer.unref) {
+      this.remoteLogFlushTimer.unref()
+    }
+  }
+
+  /**
+   * Registers a process exit handler to flush remaining logs (HAP-833)
+   * Uses the singleton pattern - only registers once per process
+   */
+  private registerProcessExitHandler(): void {
+    // Use 'beforeExit' for async cleanup opportunity
+    // Note: 'exit' is synchronous-only so we use beforeExit for the async flush
+    process.on('beforeExit', () => {
+      // Synchronously-ish flush remaining logs on exit
+      void this.flushRemoteLogBatch()
+    })
+
+    // Also handle SIGINT/SIGTERM for graceful shutdown
+    const signalHandler = () => {
+      void this.flushRemoteLogBatch().finally(() => {
+        // Clear the timer to allow clean exit
+        if (this.remoteLogFlushTimer) {
+          clearInterval(this.remoteLogFlushTimer)
+          this.remoteLogFlushTimer = null
+        }
+      })
+    }
+    process.on('SIGINT', signalHandler)
+    process.on('SIGTERM', signalHandler)
+  }
+
+  /**
+   * Queues a log entry for batched remote submission (HAP-833)
+   * Triggers immediate flush if batch size threshold is reached
+   */
+  private queueRemoteLogEntry(level: string, message: string, ...args: unknown[]): void {
     if (!this.dangerouslyUnencryptedServerLoggingUrl) return
+
+    // Build the full message including all args
+    const fullMessage = `${message} ${args.map(a =>
+      typeof a === 'object' ? JSON.stringify(sanitizeForLogging(a), null, 2) : String(a)
+    ).join(' ')}`
+
+    // Build messageRawObject from args if any exist
+    let messageRawObject: unknown = undefined
+    if (args.length > 0) {
+      messageRawObject = args.length === 1 ? sanitizeForLogging(args[0]) : args.map(a => sanitizeForLogging(a))
+    }
+
+    const entry: RemoteLogEntry = {
+      timestamp: new Date().toISOString(),
+      level,
+      message: fullMessage,
+      messageRawObject,
+      source: 'cli',
+      platform: process.platform
+    }
+
+    this.remoteLogBatch.push(entry)
+
+    // Flush immediately if batch size threshold reached
+    if (this.remoteLogBatch.length >= REMOTE_LOG_BATCH_CONFIG.MAX_BATCH_SIZE) {
+      this.flushRemoteLogBatch().catch(() => {
+        // Silently ignore flush errors to prevent loops
+      })
+    }
+  }
+
+  /**
+   * Flushes the accumulated remote log batch to the server (HAP-833)
+   * Sends all queued entries in a single request
+   */
+  private async flushRemoteLogBatch(): Promise<void> {
+    if (!this.dangerouslyUnencryptedServerLoggingUrl) return
+    if (this.remoteLogBatch.length === 0) return
+    if (this.isFlushingRemoteLogs) return // Prevent concurrent flushes
+
+    this.isFlushingRemoteLogs = true
+
+    // Take the current batch and clear it for new entries
+    const batch = this.remoteLogBatch
+    this.remoteLogBatch = []
 
     try {
       // Build headers - always include Content-Type
@@ -756,18 +946,43 @@ class Logger {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          timestamp: new Date().toISOString(),
-          level,
-          message: `${message} ${args.map(a =>
-            typeof a === 'object' ? JSON.stringify(sanitizeForLogging(a), null, 2) : String(a)
-          ).join(' ')}`,
+          // Send as a batch array - server should handle both single entries and arrays
+          entries: batch,
+          // Also include metadata about the batch
+          batchSize: batch.length,
           source: 'cli',
           platform: process.platform
         })
       })
+
+      // Reset error counter on success
+      this.remoteLogFlushErrors = 0
     } catch {
-      // Silently fail to avoid disrupting the session
+      // Track errors but don't crash - increment counter for potential backoff
+      this.remoteLogFlushErrors++
+
+      // If too many errors, disable remote logging to prevent continuous failures
+      if (this.remoteLogFlushErrors >= 10) {
+        if (process.env.DEBUG) {
+          console.error('[DEV] Remote logging disabled after 10 consecutive failures')
+        }
+        this.dangerouslyUnencryptedServerLoggingUrl = undefined
+        if (this.remoteLogFlushTimer) {
+          clearInterval(this.remoteLogFlushTimer)
+          this.remoteLogFlushTimer = null
+        }
+      }
+    } finally {
+      this.isFlushingRemoteLogs = false
     }
+  }
+
+  /**
+   * @deprecated Use queueRemoteLogEntry for batched remote logging (HAP-833)
+   * Kept for backward compatibility but now delegates to batched implementation
+   */
+  private async sendToRemoteServer(level: string, message: string, ...args: unknown[]): Promise<void> {
+    this.queueRemoteLogEntry(level, message, ...args)
   }
 
   /**
