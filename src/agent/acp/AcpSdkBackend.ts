@@ -215,9 +215,12 @@ export class AcpSdkBackend implements AgentBackend {
   private toolCallTimeouts = new Map<string, NodeJS.Timeout>();
   /** Track tool call start times for performance monitoring */
   private toolCallStartTimes = new Map<string, number>();
-  /** Pending permission requests that need response */
-  private pendingPermissions = new Map<string, (response: RequestPermissionResponse) => void>();
-  
+  /** Pending permission requests that need response - stores resolver and options for deferred permission handling */
+  private pendingPermissions = new Map<string, {
+    resolve: (response: RequestPermissionResponse) => void;
+    options: Array<{ optionId?: string; name?: string; kind?: string }>;
+  }>();
+
   /** Map from permission request ID to real tool call ID for tracking */
   private permissionToToolCallMap = new Map<string, string>();
   
@@ -607,13 +610,16 @@ export class AcpSdkBackend implements AgentBackend {
             }
           }
           
-          // Auto-approve with 'proceed_once' if no permission handler
-          // optionId must match one from the request options (e.g., 'proceed_once', 'proceed_always', 'cancel')
-          const proceedOnceOption = options.find((opt) => 
-            opt.optionId === 'proceed_once' || (typeof opt.name === 'string' && opt.name.toLowerCase().includes('once'))
-          );
-          const defaultOptionId = proceedOnceOption?.optionId || (options.length > 0 && options[0].optionId ? options[0].optionId : 'proceed_once');
-          return { outcome: { outcome: 'selected', optionId: defaultOptionId } };
+          // No permission handler provided - wait for respondToPermission to be called
+          // Store the promise resolver so respondToPermission can complete the request
+          logger.debug(`[AcpSdkBackend] No permission handler - storing pending permission request: ${permissionId}`);
+
+          return new Promise<RequestPermissionResponse>((resolve) => {
+            this.pendingPermissions.set(permissionId, {
+              resolve,
+              options,
+            });
+          });
         },
       };
 
@@ -1276,8 +1282,58 @@ export class AcpSdkBackend implements AgentBackend {
 
   async respondToPermission(requestId: string, approved: boolean): Promise<void> {
     logger.debug(`[AcpSdkBackend] Permission response: ${requestId} = ${approved}`);
+
+    // Look up the pending permission request
+    const pending = this.pendingPermissions.get(requestId);
+    if (!pending) {
+      logger.debug(`[AcpSdkBackend] Permission request not found or already resolved: ${requestId}`);
+      // Still emit the event for local listeners (for consistency)
+      this.emit({ type: 'permission-response', id: requestId, approved });
+      return;
+    }
+
+    // Remove from pending map
+    this.pendingPermissions.delete(requestId);
+
+    // Determine the optionId based on approval and available options
+    let optionId: string;
+
+    if (approved) {
+      // Find proceed option - prefer 'proceed_once', fallback to 'proceed_always' or first option
+      const proceedOnceOption = pending.options.find((opt) =>
+        opt.optionId === 'proceed_once' || (typeof opt.name === 'string' && opt.name.toLowerCase().includes('once'))
+      );
+      const proceedAlwaysOption = pending.options.find((opt) =>
+        opt.optionId === 'proceed_always' || (typeof opt.name === 'string' && opt.name.toLowerCase().includes('always'))
+      );
+
+      if (proceedOnceOption) {
+        optionId = proceedOnceOption.optionId || 'proceed_once';
+      } else if (proceedAlwaysOption) {
+        optionId = proceedAlwaysOption.optionId || 'proceed_always';
+      } else if (pending.options.length > 0 && pending.options[0].optionId) {
+        optionId = pending.options[0].optionId;
+      } else {
+        optionId = 'proceed_once';
+      }
+    } else {
+      // Find cancel option
+      const cancelOption = pending.options.find((opt) =>
+        opt.optionId === 'cancel' || (typeof opt.name === 'string' && opt.name.toLowerCase().includes('cancel'))
+      );
+      optionId = cancelOption?.optionId || 'cancel';
+    }
+
+    // Resolve the pending promise with the ACP response
+    const response: RequestPermissionResponse = {
+      outcome: { outcome: 'selected', optionId },
+    };
+
+    logger.debug(`[AcpSdkBackend] Resolving permission ${requestId} with optionId: ${optionId}`);
+    pending.resolve(response);
+
+    // Emit event for local listeners
     this.emit({ type: 'permission-response', id: requestId, approved });
-    // TODO: Implement actual permission response when needed
   }
 
   async dispose(): Promise<void> {
@@ -1340,6 +1396,16 @@ export class AcpSdkBackend implements AgentBackend {
     }
     this.toolCallTimeouts.clear();
     this.toolCallStartTimes.clear();
+
+    // Cancel all pending permissions with a 'cancel' response before clearing
+    for (const [permissionId, pending] of this.pendingPermissions.entries()) {
+      logger.debug(`[AcpSdkBackend] Cancelling pending permission on dispose: ${permissionId}`);
+      const cancelOption = pending.options.find((opt) =>
+        opt.optionId === 'cancel' || (typeof opt.name === 'string' && opt.name.toLowerCase().includes('cancel'))
+      );
+      const optionId = cancelOption?.optionId || 'cancel';
+      pending.resolve({ outcome: { outcome: 'selected', optionId } });
+    }
     this.pendingPermissions.clear();
   }
 }

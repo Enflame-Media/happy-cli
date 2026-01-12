@@ -355,3 +355,196 @@ describe('AcpSdkBackend disabledTools permission denial', () => {
     expect(disabledTools.has('safe_tool')).toBe(false);
   });
 });
+
+describe('AcpSdkBackend respondToPermission', () => {
+  const baseOptions: AcpSdkBackendOptions = {
+    agentName: 'test',
+    cwd: '/test',
+    command: 'test-cmd',
+    args: ['--test'],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  describe('pending permissions management', () => {
+    it('should have pendingPermissions as a Map with correct structure', () => {
+      const backend = new AcpSdkBackend(baseOptions);
+      const pendingPermissions = (backend as any).pendingPermissions;
+
+      expect(pendingPermissions).toBeInstanceOf(Map);
+      expect(pendingPermissions.size).toBe(0);
+    });
+
+    it('should resolve pending permission with approved optionId when approved', async () => {
+      const backend = new AcpSdkBackend(baseOptions);
+      const permissionId = 'test-permission-id';
+      const options = [
+        { optionId: 'proceed_once', name: 'Proceed Once' },
+        { optionId: 'cancel', name: 'Cancel' },
+      ];
+
+      let resolvedResponse: any = null;
+
+      (backend as any).pendingPermissions.set(permissionId, {
+        resolve: (response: any) => {
+          resolvedResponse = response;
+        },
+        options,
+      });
+
+      await backend.respondToPermission(permissionId, true);
+
+      expect(resolvedResponse).toEqual({
+        outcome: { outcome: 'selected', optionId: 'proceed_once' },
+      });
+
+      expect((backend as any).pendingPermissions.has(permissionId)).toBe(false);
+    });
+
+    it('should resolve pending permission with cancel optionId when denied', async () => {
+      const backend = new AcpSdkBackend(baseOptions);
+      const permissionId = 'test-permission-id';
+      const options = [
+        { optionId: 'proceed_once', name: 'Proceed Once' },
+        { optionId: 'cancel', name: 'Cancel' },
+      ];
+
+      let resolvedResponse: any = null;
+
+      (backend as any).pendingPermissions.set(permissionId, {
+        resolve: (response: any) => {
+          resolvedResponse = response;
+        },
+        options,
+      });
+
+      await backend.respondToPermission(permissionId, false);
+
+      expect(resolvedResponse).toEqual({
+        outcome: { outcome: 'selected', optionId: 'cancel' },
+      });
+
+      expect((backend as any).pendingPermissions.has(permissionId)).toBe(false);
+    });
+
+    it('should handle missing pending permission gracefully', async () => {
+      const backend = new AcpSdkBackend(baseOptions);
+      const handler = vi.fn();
+      backend.onMessage(handler);
+
+      await backend.respondToPermission('non-existent-id', true);
+
+      expect(handler).toHaveBeenCalledWith({
+        type: 'permission-response',
+        id: 'non-existent-id',
+        approved: true,
+      });
+    });
+
+    it('should fallback to default optionIds when options are empty', async () => {
+      const backend = new AcpSdkBackend(baseOptions);
+      const permissionId = 'test-permission-id';
+      const options: any[] = [];
+
+      let resolvedResponse: any = null;
+
+      (backend as any).pendingPermissions.set(permissionId, {
+        resolve: (response: any) => {
+          resolvedResponse = response;
+        },
+        options,
+      });
+
+      await backend.respondToPermission(permissionId, true);
+
+      expect(resolvedResponse).toEqual({
+        outcome: { outcome: 'selected', optionId: 'proceed_once' },
+      });
+    });
+
+    it('should prefer proceed_always option for session approval', async () => {
+      const backend = new AcpSdkBackend(baseOptions);
+      const permissionId = 'test-permission-id';
+      const options = [
+        { optionId: 'proceed_always', name: 'Proceed Always' },
+        { optionId: 'cancel', name: 'Cancel' },
+      ];
+
+      let resolvedResponse: any = null;
+
+      (backend as any).pendingPermissions.set(permissionId, {
+        resolve: (response: any) => {
+          resolvedResponse = response;
+        },
+        options,
+      });
+
+      await backend.respondToPermission(permissionId, true);
+
+      expect(resolvedResponse).toEqual({
+        outcome: { outcome: 'selected', optionId: 'proceed_always' },
+      });
+    });
+  });
+
+  describe('dispose cleanup', () => {
+    it('should cancel all pending permissions on dispose', async () => {
+      const backend = new AcpSdkBackend(baseOptions);
+      const permissionId = 'test-permission-id';
+      const options = [
+        { optionId: 'proceed_once', name: 'Proceed Once' },
+        { optionId: 'cancel', name: 'Cancel' },
+      ];
+
+      let resolvedResponse: any = null;
+
+      (backend as any).pendingPermissions.set(permissionId, {
+        resolve: (response: any) => {
+          resolvedResponse = response;
+        },
+        options,
+      });
+
+      await backend.dispose();
+
+      expect(resolvedResponse).toEqual({
+        outcome: { outcome: 'selected', optionId: 'cancel' },
+      });
+
+      expect((backend as any).pendingPermissions.size).toBe(0);
+    });
+  });
+
+  describe('event emission', () => {
+    it('should emit permission-response event when resolving pending permission', async () => {
+      const backend = new AcpSdkBackend(baseOptions);
+      const handler = vi.fn();
+      backend.onMessage(handler);
+
+      const permissionId = 'test-permission-id';
+      const options = [
+        { optionId: 'proceed_once', name: 'Proceed Once' },
+        { optionId: 'cancel', name: 'Cancel' },
+      ];
+
+      (backend as any).pendingPermissions.set(permissionId, {
+        resolve: () => {},
+        options,
+      });
+
+      await backend.respondToPermission(permissionId, true);
+
+      expect(handler).toHaveBeenCalledWith({
+        type: 'permission-response',
+        id: permissionId,
+        approved: true,
+      });
+    });
+  });
+});
