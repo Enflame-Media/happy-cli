@@ -40,5 +40,9 @@ pnpm-lock.yaml
 # test coverage
 coverage/
 
+# Stryker mutation testing
+.stryker-tmp/
+reports/mutation/
+
 # npm auth token (never commit)
 .npmrc

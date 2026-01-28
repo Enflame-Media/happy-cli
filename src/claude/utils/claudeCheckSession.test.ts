@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { claudeCheckSession } from './claudeCheckSession';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';

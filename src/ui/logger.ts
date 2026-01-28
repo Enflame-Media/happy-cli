@@ -972,9 +972,10 @@ class Logger {
     if (!this.dangerouslyUnencryptedServerLoggingUrl) return
 
     // Build the full message including all args
-    // HAP-831: Apply string-based secret redaction to the message and string args
+    // HAP-831: Apply string-based secret redaction to the entire message
+    // Objects get field-based sanitization, then the whole string gets pattern-based redaction
     const fullMessage = redactSecretsInString(`${message} ${args.map(a =>
-      typeof a === 'object' ? JSON.stringify(sanitizeForLogging(a), null, 2) : redactSecretsInString(String(a))
+      typeof a === 'object' ? JSON.stringify(sanitizeForLogging(a), null, 2) : String(a)
     ).join(' ')}`)
 
     // Build messageRawObject from args if any exist

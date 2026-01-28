@@ -17,6 +17,7 @@
 ## Code Style Preferences
 
 ### TypeScript Conventions
+
 - **Strict typing**: No untyped code ("I despise untyped code")
 - **Clean function signatures**: Explicit parameter and return types
 - **As little as possible classes**
@@ -32,6 +33,7 @@
 - **NEVER import modules mid-code** - ALL imports must be at the top of the file
 
 ### Error Handling
+
 - Graceful error handling with proper error messages
 - Use of `try-catch` blocks with specific error logging
 - Abort controllers for cancellable operations
@@ -55,6 +57,7 @@ process.removeListener('exit', exitHandler)
 ```
 
 **Examples in codebase:**
+
 - `query.ts` - Removes exit handlers after each query completes
 - `runClaude.ts` - Removes SIGINT/SIGTERM handlers after each session
 
@@ -72,6 +75,7 @@ function setupGlobalHandlers() {
 ```
 
 **Examples in codebase:**
+
 - `caffeinate.ts` - Singleton process, handlers persist until exit
 - `daemon/run.ts` - Global daemon handlers, run until process termination
 
@@ -90,12 +94,71 @@ process.removeListener('exit', handler)
 ```
 
 ### Testing
+
 - Unit tests using Vitest
 - No mocking - tests make real API calls
 - Test files colocated with source files (`.test.ts`)
 - Descriptive test names and proper async handling
 
+## Mutation Testing
+
+This project uses [Stryker Mutator](https://stryker-mutator.io/) for mutation testing to validate test quality. Mutation testing introduces small changes (mutants) to production code and verifies that tests detect these changes. Surviving mutants indicate gaps in test coverage.
+
+### Commands
+
+| Command | Purpose |
+|---------|---------|
+| `yarn mutate` | Full mutation test run with HTML report |
+| `yarn mutate:incremental` | Fast incremental run (recommended for local dev) |
+| `yarn mutate:dry-run` | Verify setup without running mutations |
+| `yarn mutate:report` | Open HTML report in browser |
+
+### Reports
+
+- **HTML Report**: `reports/mutation/html/index.html` - Interactive report showing all mutants
+- **JSON Report**: `reports/mutation/mutation.json` - Machine-readable results
+- **Incremental Cache**: `reports/mutation/stryker-incremental.json` - Speeds up subsequent runs
+
+### Interpreting Results
+
+| Status | Meaning |
+|--------|---------|
+| **Killed** | Test detected the mutation (good) |
+| **Survived** | Test missed the mutation (needs improvement) |
+| **No Coverage** | No test covers this code |
+| **Timeout** | Mutation caused infinite loop |
+| **Compile Error** | Mutation created invalid TypeScript |
+
+### Best Practices
+
+1. Run `yarn mutate:incremental` before major commits
+2. Focus on surviving mutants in critical business logic (auth, encryption, API)
+3. Don't aim for 100% - some mutants are equivalent or low-value
+4. Review HTML report during code review
+
+### Configuration
+
+Configuration is in `stryker.config.mjs`. Key settings:
+
+- **mutate**: Production files only (excludes tests, server-dependent modules, UI modules)
+- **testRunner**: Vitest with `vitest.stryker.config.ts` (no build step)
+- **checkers**: TypeScript checker filters type-invalid mutants
+- **inPlace**: Enabled for compatibility with workspace path aliases
+- **incremental**: Enabled for faster subsequent runs
+- **thresholds**: Advisory only (80% high, 60% low, no break threshold)
+
+### Excluded Modules
+
+Some modules are excluded from mutation testing because they require:
+
+- Running happy-server (daemon, API clients, RPC)
+- Ink/React rendering context (UI modules)
+- Integration test environment (session handlers)
+
+These are tested via integration tests (`daemon.integration.test.ts`) instead.
+
 ### Logging
+
 - All debugging through file logs to avoid disturbing Claude sessions
 - Console output only for user-facing messages
 - Special handling for large JSON objects with truncation
@@ -103,6 +166,7 @@ process.removeListener('exit', handler)
 ## Architecture & Key Components
 
 ### 1. API Module (`/src/api/`)
+
 Handles server communication and encryption.
 
 - **`api.ts`**: Main API client class for session management
@@ -112,12 +176,14 @@ Handles server communication and encryption.
 - **`types.ts`**: Zod schemas for type-safe API communication
 
 **Key Features:**
+
 - End-to-end encryption for all communications
 - Socket.IO for real-time messaging
 - Optimistic concurrency control for state updates
 - RPC handler registration for remote procedure calls
 
 ### 2. Claude Integration (`/src/claude/`)
+
 Core Claude Code integration layer. Uses globally-installed Claude Code (not bundled).
 
 - **`loop.ts`**: Main control loop managing interactive/remote modes
@@ -128,12 +194,14 @@ Core Claude Code integration layer. Uses globally-installed Claude Code (not bun
 - **`mcp/startPermissionServer.ts`**: MCP (Model Context Protocol) permission server
 
 **Key Features:**
+
 - Dual mode operation: interactive (terminal) and remote (mobile control)
 - Session persistence and resumption
 - Real-time message streaming
 - Permission intercepting via MCP [Permission checking not implemented yet]
 
 ### 3. UI Module (`/src/ui/`)
+
 User interface components.
 
 - **`logger.ts`**: Centralized logging system with file output
@@ -141,6 +209,7 @@ User interface components.
 - **`start.ts`**: Main application startup and orchestration
 
 **Key Features:**
+
 - Clean console UI with chalk styling
 - QR code display for easy mobile connection
 - Graceful mode switching between interactive and remote
@@ -153,7 +222,7 @@ User interface components.
 
 ## Data Flow
 
-1. **Authentication**: 
+1. **Authentication**:
    - Generate/load secret key → Create signature challenge → Get auth token
 
 2. **Session Creation**:
@@ -188,12 +257,14 @@ The CLI includes defense-in-depth protections against OS command injection (CWE-
 **Location**: `src/modules/common/pathSecurity.ts`
 
 **Protections**:
+
 1. **Command Allowlist**: Only pre-approved commands can be executed via the bash RPC handler
 2. **Shell Metacharacter Blocking**: Characters like `;`, `|`, `&`, `` ` ``, `$`, `()`, `<>` are blocked to prevent command chaining
 3. **Subcommand Restrictions**: Some commands (git, npm, docker) only allow specific subcommands
 4. **Audit Logging**: All command attempts are logged (allowed and blocked) for security monitoring
 
 **Allowed Commands** (see `ALLOWED_COMMANDS` in `pathSecurity.ts`):
+
 - **Git**: status, diff, log, branch, show, rev-parse, remote, fetch, config, ls-files, stash
 - **File ops**: ls, cat, head, tail, pwd, which, wc, file, find, tree
 - **Build tools**: npm (run, test, build), yarn, pnpm, node, tsc, etc.
@@ -204,6 +275,7 @@ The CLI includes defense-in-depth protections against OS command injection (CWE-
 Defense in depth - if encryption is ever compromised (key theft, mobile device compromise), the allowlist still prevents arbitrary code execution.
 
 **Adding new commands**: Edit `ALLOWED_COMMANDS` in `pathSecurity.ts`. Consider:
+
 - Is the command read-only or has limited side effects?
 - Can it be exploited with malicious arguments?
 - Should subcommands be restricted?
@@ -245,14 +317,16 @@ The server uses simpler TweetNaCl secretbox because it only encrypts server-mana
 **Claude Code** must be installed globally before using Happy CLI. It is NOT bundled with this package.
 
 **Detection Order**: Happy CLI searches for Claude Code in this order:
+
 1. **npm global** - `npm root -g`/`@anthropic-ai/claude-code`
 2. **Homebrew** - `/opt/homebrew/bin/claude` or `/usr/local/bin/claude`
 3. **Native installer** - `~/.claude/local/claude`
 
 Install via one of:
+
 - `npm install -g @anthropic-ai/claude-code` (recommended)
 - `brew install claude-code` (macOS/Linux)
-- Native installer: https://claude.ai/install
+- Native installer: <https://claude.ai/install>
 
 ### Package Dependencies
 
@@ -345,6 +419,7 @@ Session revival allows automatically resuming stopped sessions when RPC requests
 | `HAPPY_SESSION_REVIVAL_MAX_ATTEMPTS` | Max revival attempts per session before giving up | 3 |
 
 **Example:**
+
 ```bash
 # Allow more revival attempts for debugging
 HAPPY_SESSION_REVIVAL_MAX_ATTEMPTS=5 ./bin/happy.mjs daemon start
@@ -354,6 +429,7 @@ HAPPY_SESSION_REVIVAL_TIMEOUT=30000 ./bin/happy.mjs daemon start
 ```
 
 **Notes:**
+
 - Circuit breaker triggers after 10 failures in 30 seconds, pausing revivals for 60 seconds
 - Per-session attempt counter resets on successful revival
 - Invalid values for `HAPPY_SESSION_REVIVAL_MAX_ATTEMPTS` (non-positive integers) default to 3
@@ -363,6 +439,7 @@ HAPPY_SESSION_REVIVAL_TIMEOUT=30000 ./bin/happy.mjs daemon start
 # Running the Daemon
 
 ## Starting the Daemon
+
 ```bash
 # From the happy-cli directory:
 ./bin/happy.mjs daemon start
@@ -378,6 +455,7 @@ HAPPY_SERVER_URL=http://localhost:3005 ./bin/happy.mjs daemon start
 ```
 
 ## Daemon Logs
+
 - Daemon logs are stored in `~/.happy-dev/logs/` (or `$HAPPY_HOME_DIR/logs/`)
 - Named with format: `YYYY-MM-DD-HH-MM-SS-daemon.log`
 
@@ -386,37 +464,45 @@ HAPPY_SERVER_URL=http://localhost:3005 ./bin/happy.mjs daemon start
 ## Commands Run
 
 ### Initial Session
+
 ```bash
 claude --print --output-format stream-json --verbose 'list files in this directory'
 ```
+
 - Original Session ID: `aada10c6-9299-4c45-abc4-91db9c0f935d`
 - Created file: `~/.claude/projects/.../aada10c6-9299-4c45-abc4-91db9c0f935d.jsonl`
 
 ### Resume with --resume flag
+
 ```bash
 claude --print --output-format stream-json --verbose --resume aada10c6-9299-4c45-abc4-91db9c0f935d 'what file did we just see?'
 ```
+
 - New Session ID: `1433467f-ff14-4292-b5b2-2aac77a808f0`
 - Created file: `~/.claude/projects/.../1433467f-ff14-4292-b5b2-2aac77a808f0.jsonl`
 
 ## Key Findings for --resume
 
 ### 1. Session File Behavior
+
 - Creates a NEW session file with NEW session ID
 - Original session file remains unchanged
 - Two separate files exist after resumption
 
 ### 2. History Preservation
+
 - The new session file contains the COMPLETE history from the original session
 - History is prefixed at the beginning of the new file
 - Includes a summary line at the very top
 
 ### 3. Session ID Rewriting
+
 - **CRITICAL FINDING**: All historical messages have their sessionId field UPDATED to the new session ID
 - Original messages from session `aada10c6-9299-4c45-abc4-91db9c0f935d` now show `sessionId: "1433467f-ff14-4292-b5b2-2aac77a808f0"`
 - This creates a unified session history under the new ID
 
 ### 4. Message Structure in New File
+
 ```
 Line 1: Summary of previous conversation
 Lines 2-6: Complete history from original session (with updated session IDs)
@@ -424,6 +510,7 @@ Lines 7-8: New messages from current interaction
 ```
 
 ### 5. Context Preservation
+
 - Claude successfully maintains full context
 - Can answer questions about previous interactions
 - Behaves as if it's a continuous conversation
@@ -431,11 +518,13 @@ Lines 7-8: New messages from current interaction
 ## Technical Details
 
 ### Original Session File Structure
+
 - Contains only messages from the original session
 - All messages have original session ID
 - Remains untouched after resume
 
 ### New Session File Structure After Resume
+
 ```json
 {"type":"summary","summary":"Listing directory files in current location","leafUuid":"..."}
 {"parentUuid":null,"sessionId":"1433467f-ff14-4292-b5b2-2aac77a808f0","message":{"role":"user","content":[{"type":"text","text":"list files in this directory"}]},...}
@@ -446,6 +535,7 @@ Lines 7-8: New messages from current interaction
 ## Implications for Happy CLI
 
 When using --resume:
+
 1. Must handle new session ID in responses
 2. Original session remains as historical record
 3. All context preserved but under new session identity

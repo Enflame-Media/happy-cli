@@ -964,6 +964,76 @@ describe('redactSecretsInString', () => {
     })
   })
 
+  describe('Discord tokens', () => {
+    it('should redact Discord bot tokens starting with M', () => {
+      // Discord tokens: [M|N] + 23+ chars + . + 6+ chars + . + 27+ chars
+      const token = 'MTA0NjQ5MjE5NjA4NjgyNTAz.G1kXYz.abcdefghijklmnopqrstuvwxyz1'
+      const result = redactSecretsInString(`Discord Bot: ${token}`)
+      expect(result).toBe('Discord Bot: [REDACTED:discord_token]')
+    })
+
+    it('should redact Discord bot tokens starting with N', () => {
+      const token = 'NjA0NjQ5MjE5NjA4NjgyNTAz.G1kXYz.abcdefghijklmnopqrstuvwxyz1'
+      const result = redactSecretsInString(`Discord Token: ${token}`)
+      expect(result).toBe('Discord Token: [REDACTED:discord_token]')
+    })
+
+    it('should redact Discord tokens with underscores and hyphens', () => {
+      // The middle and last segments can contain underscores and hyphens
+      const token = 'MTA0NjQ5MjE5NjA4NjgyNTAz.G1k_Yz.abc-def_ghijklmnopqrstuvwxyz'
+      const result = redactSecretsInString(`Auth: ${token}`)
+      expect(result).toBe('Auth: [REDACTED:discord_token]')
+    })
+
+    it('should redact Discord tokens in log messages', () => {
+      const token = 'MTA0NjQ5MjE5NjA4NjgyNTAz.GhIJKl.abcdefghijklmnopqrstuvwxyz1'
+      const input = `Bot login failed for token ${token} at timestamp 1234567890`
+      const result = redactSecretsInString(input)
+      expect(result).toBe('Bot login failed for token [REDACTED:discord_token] at timestamp 1234567890')
+    })
+
+    it('should redact multiple Discord tokens', () => {
+      const token1 = 'MTA0NjQ5MjE5NjA4NjgyNTAz.G1kXYz.abcdefghijklmnopqrstuvwxyz1'
+      const token2 = 'NjE1MDI4OTM0NTY3ODkwMTIz.HjKlMn.zyxwvutsrqponmlkjihgfedcba1'
+      const result = redactSecretsInString(`Old: ${token1}, New: ${token2}`)
+      expect(result).toBe('Old: [REDACTED:discord_token], New: [REDACTED:discord_token]')
+    })
+
+    it('should not redact short Discord-like strings (first segment too short)', () => {
+      // First segment needs 24+ chars (M/N + 23+)
+      const shortToken = 'MTA0NjQ5MjE5.G1kXYz.abcdefghijklmnopqrstuvwxyz1'
+      const result = redactSecretsInString(`Short: ${shortToken}`)
+      expect(result).toBe(`Short: ${shortToken}`)
+    })
+
+    it('should not redact strings with only two segments', () => {
+      const twoSegments = 'MTA0NjQ5MjE5NjA4NjgyNTAz.G1kXYz'
+      const result = redactSecretsInString(`Partial: ${twoSegments}`)
+      expect(result).toBe(`Partial: ${twoSegments}`)
+    })
+
+    it('should not redact strings starting with other letters', () => {
+      // Must start with M or N
+      const wrongStart = 'ATA0NjQ5MjE5NjA4NjgyNTAz.G1kXYz.abcdefghijklmnopqrstuvwxyz1'
+      const result = redactSecretsInString(`Invalid: ${wrongStart}`)
+      expect(result).toBe(`Invalid: ${wrongStart}`)
+    })
+
+    it('should not redact strings with short middle segment', () => {
+      // Middle segment needs 6+ chars
+      const shortMiddle = 'MTA0NjQ5MjE5NjA4NjgyNTAz.ABC.abcdefghijklmnopqrstuvwxyz1'
+      const result = redactSecretsInString(`Bad middle: ${shortMiddle}`)
+      expect(result).toBe(`Bad middle: ${shortMiddle}`)
+    })
+
+    it('should not redact strings with short last segment', () => {
+      // Last segment needs 27+ chars
+      const shortLast = 'MTA0NjQ5MjE5NjA4NjgyNTAz.G1kXYz.abcdef'
+      const result = redactSecretsInString(`Bad last: ${shortLast}`)
+      expect(result).toBe(`Bad last: ${shortLast}`)
+    })
+  })
+
   describe('base64 secrets', () => {
     it('should redact long base64 strings ending with =', () => {
       const base64 = 'YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY3ODkw='
