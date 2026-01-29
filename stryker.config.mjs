@@ -50,6 +50,7 @@ export default {
 
     // Test runner configuration
     // Uses Stryker-specific vitest config (no globalSetup build step)
+    // NOTE: Run `yarn build` before mutation testing
     testRunner: 'vitest',
     vitest: {
         configFile: 'vitest.stryker.config.ts',
@@ -59,9 +60,8 @@ export default {
     checkers: ['typescript'],
     tsconfigFile: 'tsconfig.json',
 
-    // Coverage analysis - using 'off' because CLI tests have complex setup
-    // that doesn't work well with perTest coverage in sandbox environments
-    coverageAnalysis: 'off',
+    // Coverage analysis - maps mutants to specific tests
+    coverageAnalysis: 'perTest',
 
     // Output reporters
     reporters: ['clear-text', 'progress', 'html', 'json'],
@@ -93,22 +93,19 @@ export default {
     // Note: ignoreStatic requires perTest coverage analysis
     maxTestRunnerReuse: 50,
 
-    // Run tests in place (no sandbox) to avoid path resolution issues
-    // Required for workspace path alias compatibility (@/ imports)
-    // Safety: Use `git checkout .` to restore files if Stryker terminates unexpectedly
-    inPlace: true,
+    // Disable symlinkNodeModules to avoid Vite resolution issues with package.json exports
+    symlinkNodeModules: false,
 
     // Cleanup
     tempDirName: '.stryker-tmp',
     cleanTempDir: true,
 
     // Files to ignore when copying to sandbox
+    // Note: dist and tools are NOT ignored - required for tests
+    // The CLI must be built before running mutation tests
     ignorePatterns: [
-        'dist',
         'coverage',
         'reports',
-        'tools',
-        'bin',
         '*.log',
     ],
 };
